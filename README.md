@@ -2,7 +2,7 @@
 
 Projeto Android nativo, em Java, para apoiar um motorista de Uber e 99. A meta inicial é R$ 500 brutos por dia. O app observa ofertas durante uma jornada iniciada pelo motorista, mostra uma avaliação na tela, guarda localização e resultados, calcula orçamentos particulares e aprende padrões de faturamento a partir dos totais informados.
 
-Na versão 0.2, a leitura de ofertas usa captura de tela autorizada pelo Android e OCR local. A permissão de Acessibilidade foi retirada para evitar o bloqueio de instalação encontrado no Android 16. A calibração em um aparelho real ainda precisa ocorrer.
+Na versão 0.2, a leitura de ofertas usa captura de tela autorizada pelo Android e OCR local. A permissão de Acessibilidade foi retirada para evitar o bloqueio de instalação encontrado no Android 16. A compilação final foi aprovada no GitHub Actions em 25/09/2026. A calibração em um aparelho real ainda precisa ocorrer.
 
 O arquivo `CLOUD_BUILD.md` explica a compilação no GitHub Actions pelo celular. O fluxo de trabalho está em `.github/workflows/build-apk.yml`. Use apenas um repositório privado.
 
@@ -16,6 +16,8 @@ O fluxo `.github/workflows/build-apk.yml` compila automaticamente cada atualiza�
 4. O APK resultante deve ficar em `app/build/outputs/apk/debug/app-debug.apk`.
 
 Requer Android 11 ou superior (`minSdk 30`). O aplicativo foi configurado para Android 16 (`compileSdk` e `targetSdk` 36). Não precisa ser publicado na Play Store.
+
+O APK do MVP contém apenas bibliotecas nativas ARM de 64 bits, compatíveis com o Moto G56 5G. O fluxo de compilação preserva a assinatura de depuração em cache para que os builds seguintes do mesmo ciclo possam atualizar esta versão.
 
 ## Primeira utilização
 
