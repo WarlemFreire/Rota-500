@@ -12,6 +12,10 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "0.2.0"
+        ndk {
+            // O MVP será instalado no Moto G56 5G, que usa ARM de 64 bits.
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
