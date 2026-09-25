@@ -55,7 +55,8 @@ final class DecisionAlert {
         panel.setPadding(dp(14), dp(10), dp(14), dp(9));
         panel.setAlpha(1f);
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(17, 24, 39));
+        background.setColor(Color.argb(255, 8, 12, 20));
+        background.setAlpha(255);
         background.setCornerRadius(dp(14));
         background.setStroke(dp(2), color);
         panel.setBackground(background);
@@ -86,10 +87,12 @@ final class DecisionAlert {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_SECURE,
                 PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         params.y = dp(60);
+        params.alpha = 1f;
         try {
             windowManager.addView(overlay, params);
             handler.postDelayed(hideTask, 6_000L);
@@ -123,7 +126,7 @@ final class DecisionAlert {
         circle.setShape(GradientDrawable.OVAL);
         circle.setColor(colorFor(light));
         dot.setBackground(circle);
-        cell.addView(dot, new LinearLayout.LayoutParams(dp(14), dp(14)));
+        cell.addView(dot, new LinearLayout.LayoutParams(dp(23), dp(23)));
 
         TextView name = new TextView(context);
         name.setText(label);

@@ -56,8 +56,8 @@ public final class ScreenCaptureService extends Service {
     private static final String CHANNEL = "rota500_screen_reader_v2";
     private static final int NOTIFICATION_ID = 501;
     // A tela é lida continuamente. Quadros antigos são descartados enquanto o OCR trabalha.
-    private static final long OCR_INTERVAL_MS = 100L;
-    private static final long OFFER_COOLDOWN_MS = 750L;
+    private static final long OCR_INTERVAL_MS = 50L;
+    private static final long SAME_OFFER_COOLDOWN_MS = 8_000L;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final OfferTextParser parser = new OfferTextParser();
@@ -74,6 +74,7 @@ public final class ScreenCaptureService extends Service {
     private boolean processing;
     private long lastOcrAt;
     private long lastOfferAt;
+    private long lastOfferSeenAt;
     private String lastOfferHash = "";
 
     @Override public void onCreate() {
@@ -231,7 +232,13 @@ public final class ScreenCaptureService extends Service {
                 if (!line.getText().isBlank()) lines.add(line.getText());
             }
         }
-        if (!looksLikeOffer(lines)) return;
+        long now = System.currentTimeMillis();
+        if (!looksLikeOffer(lines)) {
+            // Ao sair uma oferta, libera até uma oferta seguinte com valores iguais.
+            if (lastOfferSeenAt > 0 && now - lastOfferSeenAt >= 500L) lastOfferHash = "";
+            return;
+        }
+        lastOfferSeenAt = now;
         String joined = String.join(" ", lines);
         OfferData offer = parser.parse(platformFor(joined), lines);
         DecisionRules rules = preferences.decisionRules();
@@ -240,12 +247,16 @@ public final class ScreenCaptureService extends Service {
         // Uma leitura parcial não deve virar uma orientação vaga. O quadro seguinte
         // será analisado imediatamente e só uma decisão binária será mostrada.
         if (decision.outcome == RuleDecision.Outcome.REVIEW) return;
-        long now = System.currentTimeMillis();
-        if (offer.fareCents <= 0 || offer.sourceHash.equals(lastOfferHash)
-                || now - lastOfferAt < OFFER_COOLDOWN_MS) return;
+        if (offer.fareCents <= 0) return;
+        // Ofertas diferentes não têm espera entre si. Uma nova decisão substitui
+        // o aviso anterior imediatamente, mesmo quando as corridas vêm em sequência.
+        if (offer.sourceHash.equals(lastOfferHash)
+                && now - lastOfferAt < SAME_OFFER_COOLDOWN_MS) return;
         lastOfferHash = offer.sourceHash;
         lastOfferAt = now;
-        if (!database.insertOffer(offer, decision, unsafe)) return;
+        // O banco evita duplicata, mas uma oferta igual após desaparecer da tela
+        // ainda precisa voltar a ser mostrada ao motorista.
+        database.insertOffer(offer, decision, unsafe);
         publishDecision(offer, decision, rules);
     }
 
