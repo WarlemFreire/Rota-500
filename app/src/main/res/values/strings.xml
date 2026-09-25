@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rota 500</string>
+    <string name="accessibility_description">Lê ofertas exibidas pela Uber e pela 99, calcula indicadores e pode recusar apenas pelas regras fixas autorizadas.</string>
+</resources>

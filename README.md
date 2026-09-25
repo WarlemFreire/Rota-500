@@ -1,1 +1,53 @@
-# Rota-500
+# Rota 500, MVP Android
+
+Projeto Android nativo, em Java, para apoiar um motorista de Uber e 99. A meta inicial é R$ 500 brutos por dia. O app observa ofertas durante uma jornada iniciada pelo motorista, mostra uma avaliação na tela, guarda localização e resultados, calcula orçamentos particulares e aprende padrões de faturamento a partir dos totais informados.
+
+Este pacote contém **código-fonte**. Ainda não contém APK: o ambiente em que foi criado não disponibilizou Android SDK nem Gradle, e o acesso aos downloads oficiais foi bloqueado. Os testes do núcleo e a validação de sintaxe foram executados; a compilação Android e a calibração em um aparelho real ainda precisam ocorrer.
+
+O arquivo `CLOUD_BUILD.md` explica a compilação no GitHub Actions pelo celular. O fluxo de trabalho está em `.github/workflows/build-apk.yml`. Use apenas um repositório privado.
+
+## Compilar
+
+1. Instale Android Studio com JDK 17, Android SDK Platform 36 e Build Tools 36.0.0.
+2. Abra a pasta `rota500` como projeto no Android Studio. O projeto usa Android Gradle Plugin 9.3.3 e Gradle 9.5.0. O arquivo `gradle/wrapper/gradle-wrapper.properties` registra a versão, mas **não há `gradlew` nem `gradle-wrapper.jar`** neste pacote. Configure a distribuição Gradle 9.5.0 na IDE ou gere um wrapper padrão em um ambiente que já possua Gradle.
+3. Sincronize o projeto. Gere o APK de depuração pela IDE, ou execute `gradle :app:assembleDebug` com o SDK e o Gradle instalados.
+4. O APK resultante deve ficar em `app/build/outputs/apk/debug/app-debug.apk`.
+
+Requer Android 11 ou superior (`minSdk 30`). O aplicativo foi configurado para Android 16 (`compileSdk` e `targetSdk` 36). Não precisa ser publicado na Play Store.
+
+## Primeira utilização
+
+1. Abra **Regras e configurações**. Confira meta, custo total por quilômetro, régua de R$/km, jornada e áreas de risco.
+2. Ative a leitura de tela em **Acessibilidade**, pelo menu do Android. Inicie a jornada no Rota 500 e permita localização. Uma notificação permanente informa que a coleta está ativa.
+3. Faça a calibração com ofertas reais de Uber e 99. Confirme se valor, tempo, quilometragem, endereço, botão de recusa e sobreposição correspondem à tela. Deixe **recusa automática desativada** até isso funcionar em diferentes telas e situações.
+4. Atualize o **bruto acumulado da jornada atual** periodicamente, somando Uber, 99 e corridas particulares. O painel soma as jornadas iniciadas no mesmo dia. O app ainda não lê o faturamento realizado diretamente dos extratos das plataformas.
+5. Faça um backup dos dados em uma pasta escolhida pelo seletor do Android. Se o provedor Google Drive do aparelho permitir seleção de pasta e gravação, ela pode ser usada. Restauração pelo arquivo JSON é feita no painel, depois de encerrar a jornada.
+
+## O que funciona no código
+
+- Ofertas: captura de texto por acessibilidade, cálculo com deslocamento até embarque + corrida, análise por R$/km e, em viagens longas, R$/h. Leitura incompleta ou com preços conflitantes pede revisão.
+- Segurança: nomes cadastrados de áreas proibidas; novas áreas podem ser marcadas com nome, coordenada atual e raio. A avaliação de uma rota inteira ainda não existe. A mensagem na oferta deixa isso explícito.
+- Aceite sempre manual. A recusa automática é opcional, desligada por padrão e exige confirmação de calibração; revalida a tela antes do clique. O atraso é técnico e configurável, não uma promessa de compatibilidade com as plataformas.
+- Jornada: recomenda encerrar quando a meta é alcançada ou após 12 horas. O acompanhamento é encerrado após até 18 horas, com checagem periódica. A localização fica ativa somente durante a jornada iniciada pelo motorista.
+- Estratégia: motor local com regras e estimativas por medianas, faixa de 3 horas e grade geográfica aproximada. Aprende com variações de faturamento total informadas ao longo do tempo. A IA externa opcional usa um endpoint HTTPS compatível com chat completions, modelo e chave escolhidos pelo usuário. Não há fornecedor ou modelo pré-selecionado. Se falhar, a estratégia local continua.
+- Custos: o custo operacional configurado impede recomendar corridas abaixo do próprio custo por km. O padrão de R$ 1,50/km é uma estimativa inicial a ser conferida no seu carro. A régua bruta de R$ 1,20/km continua configurável, mas o custo maior prevalece.
+- Orçamento particular: dados do cliente e trajeto, tempo, km, espera, retorno, pedágio e estacionamento; preço sugerido pelo maior piso entre operação e oportunidade. Salva status e histórico por telefone; compartilha texto do orçamento. O valor líquido alternativo nos apps deve ser informado manualmente.
+- Dados: SQLite local, backup JSON e restauração transacional. Prints do mapa não são armazenados nem entram no backup. A chave da API fica nas preferências do aparelho e não entra no backup. O banco local não usa criptografia adicional.
+
+## Limites antes do teste físico
+
+- As telas de Uber e 99 mudam. O parser e os nomes dos pacotes precisam ser calibrados no aparelho; a recusa automática ainda não foi validada em serviço real.
+- O mapa dinâmico usa uma contagem experimental de cores da imagem. Cores de controles, trânsito e fundo podem confundir a leitura. A imagem é processada na memória e descartada; o resultado não deve sustentar sozinho uma mudança de área.
+- O clima é pedido manualmente quando o app detecta o carro parado. Não há fonte automática de clima.
+- A detecção de área insegura por nome e círculo local não identifica todos os trajetos, vias alternativas ou pontos de embarque. Ela não substitui sua avaliação do mapa e da segurança real.
+- A taxa robusta depende dos totais de faturamento que você registrar ao longo da jornada. Ofertas exibidas não são dinheiro recebido. Ainda não há integração com a conclusão das corridas nos apps.
+- O aprendizado ajusta estimativas com os dados coletados. **Não há garantia de atingir R$ 500 por dia** em um ou dois meses. A consistência deve ser medida em dias comparáveis, observando horas, custo e exposição a risco.
+
+## Verificação neste ambiente
+
+```sh
+./run-core-tests.sh
+./run-static-checks.sh
+```
+
+Os resultados e as restrições da verificação estão em `TEST_REPORT.md`.
