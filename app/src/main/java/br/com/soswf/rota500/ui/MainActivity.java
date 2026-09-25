@@ -52,6 +52,9 @@ public final class MainActivity extends Activity {
     private TextView grossValue;
     private TextView goalDetails;
     private TextView paceDetails;
+    private TextView hourValue;
+    private TextView activeTimeValue;
+    private TextView offersValue;
     private ProgressBar goalProgress;
     private LinearLayout decisionCard;
     private TextView decisionTitle;
@@ -100,121 +103,204 @@ public final class MainActivity extends Activity {
     }
 
     private void buildUi() {
+        getWindow().setStatusBarColor(Ui.SURFACE);
+        getWindow().setNavigationBarColor(Ui.SURFACE);
+
+        LinearLayout screen = new LinearLayout(this);
+        screen.setOrientation(LinearLayout.VERTICAL);
+        screen.setBackgroundColor(Ui.SURFACE);
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(Ui.SURFACE);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int horizontal = Ui.dp(this, 16);
-        root.setPadding(horizontal, Ui.dp(this, 14), horizontal, Ui.dp(this, 28));
+        int horizontal = Ui.dp(this, 18);
+        root.setPadding(horizontal, Ui.dp(this, 14), horizontal, Ui.dp(this, 24));
         scroll.addView(root);
 
-        root.addView(Ui.title(this, "Rota 500"));
-        TextView subtitle = Ui.text(this, "Meta, decisão e estratégia durante a jornada", 14);
-        subtitle.setTextColor(Ui.MUTED);
-        subtitle.setPadding(0, 0, 0, Ui.dp(this, 10));
-        root.addView(subtitle);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        TextView appName = Ui.title(this, "ROTA 500");
+        appName.setTextSize(24);
+        header.addView(appName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        statusPill = Ui.pill(this, "PARADO", Ui.CARD_ALT);
+        header.addView(statusPill);
+        root.addView(header);
 
-        LinearLayout statusRow = new LinearLayout(this);
-        statusRow.setOrientation(LinearLayout.HORIZONTAL);
-        statusPill = Ui.pill(this, "FORA DE JORNADA", Ui.MUTED);
-        statusRow.addView(statusPill);
-        captureStatus = Ui.text(this, "Leitura desligada", 14);
+        captureStatus = Ui.text(this, "GPS e leitura desligados", 13);
         captureStatus.setTextColor(Ui.MUTED);
-        LinearLayout.LayoutParams statusTextParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-        statusTextParams.setMargins(Ui.dp(this, 10), 0, 0, 0);
-        statusRow.addView(captureStatus, statusTextParams);
-        root.addView(statusRow);
+        captureStatus.setPadding(0, 0, 0, Ui.dp(this, 14));
+        root.addView(captureStatus);
 
-        LinearLayout goalCard = Ui.card(this);
         TextView goalLabel = Ui.text(this, "GANHO BRUTO DE HOJE", 13);
         goalLabel.setTextColor(Ui.MUTED);
         goalLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        goalCard.addView(goalLabel);
-        grossValue = Ui.text(this, "R$ 0", 38);
+        goalLabel.setGravity(android.view.Gravity.CENTER);
+        root.addView(goalLabel);
+        grossValue = Ui.text(this, "R$ 0", 58);
         grossValue.setTextColor(Ui.NAVY);
         grossValue.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        goalCard.addView(grossValue);
+        grossValue.setGravity(android.view.Gravity.CENTER);
+        grossValue.setPadding(0, 0, 0, Ui.dp(this, 12));
+        grossValue.setOnClickListener(v -> showGrossDialog());
+        root.addView(grossValue);
+
+        LinearLayout metrics = new LinearLayout(this);
+        metrics.setOrientation(LinearLayout.HORIZONTAL);
+        hourValue = addMetric(metrics, "R$/HORA", "R$ 0", Ui.AMBER);
+        activeTimeValue = addMetric(metrics, "ATIVO", "0:00", Ui.BLUE);
+        offersValue = addMetric(metrics, "BOAS/OFERTAS", "0/0", Ui.GREEN);
+        root.addView(metrics);
+
+        LinearLayout goalCard = Ui.card(this);
+        TextView progressLabel = Ui.text(this, "META DO DIA", 12);
+        progressLabel.setTextColor(Ui.MUTED);
+        progressLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        goalCard.addView(progressLabel);
         goalDetails = Ui.text(this, "Meta: R$ 500", 17);
+        goalDetails.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         goalCard.addView(goalDetails);
         goalProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         goalProgress.setMax(1000);
         goalProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(Ui.GREEN));
         goalProgress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(Ui.BORDER));
         LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 10));
-        progressParams.setMargins(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 12));
+        progressParams.setMargins(0, Ui.dp(this, 8), 0, Ui.dp(this, 8));
         goalCard.addView(goalProgress, progressParams);
-        paceDetails = Ui.text(this, "Jornada ainda não iniciada", 15);
+        paceDetails = Ui.text(this, "Toque no valor acima para atualizar o ganho", 13);
         paceDetails.setTextColor(Ui.MUTED);
         goalCard.addView(paceDetails);
         root.addView(goalCard);
 
         decisionCard = Ui.card(this);
-        TextView decisionLabel = Ui.text(this, "ÚLTIMA LEITURA", 13);
+        TextView decisionLabel = Ui.text(this, "ÚLTIMA OFERTA", 12);
         decisionLabel.setTextColor(Ui.MUTED);
         decisionLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         decisionCard.addView(decisionLabel);
-        decisionTitle = Ui.text(this, "AGUARDANDO OFERTA", 28);
+        decisionTitle = Ui.text(this, "AGUARDANDO OFERTA", 30);
         decisionTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         decisionCard.addView(decisionTitle);
-        decisionDetails = Ui.text(this, "Abra a Uber ou a 99 com a leitura ligada.", 16);
+        decisionDetails = Ui.text(this, "Abra a Uber ou a 99 com a leitura ligada.", 15);
+        decisionDetails.setTextColor(Ui.MUTED);
         decisionCard.addView(decisionDetails);
         root.addView(decisionCard);
 
         shiftButton = Ui.primaryButton(this, "INICIAR JORNADA");
         shiftButton.setOnClickListener(v -> toggleShift());
-        root.addView(shiftButton);
-
         captureButton = Ui.secondaryButton(this, "Ligar leitura da tela");
         captureButton.setOnClickListener(v -> toggleCapture());
-        root.addView(captureButton);
-
-        Button gross = Ui.secondaryButton(this, "Atualizar ganho bruto");
-        gross.setOnClickListener(v -> showGrossDialog());
-        root.addView(gross);
+        root.addView(actionRow(shiftButton, captureButton));
 
         overlayButton = Ui.secondaryButton(this, "Mostrar decisão sobre Uber e 99");
         overlayButton.setOnClickListener(v -> requestOverlayPermission());
         root.addView(overlayButton);
 
-        root.addView(Ui.sectionTitle(this, "Estratégia"));
+        root.addView(Ui.sectionTitle(this, "ESTRATÉGIA"));
         LinearLayout strategyCard = Ui.card(this);
-        advice = Ui.text(this, "", 17);
+        advice = Ui.text(this, "", 16);
         strategyCard.addView(advice);
-        Button strategy = Ui.secondaryButton(this, "Recalcular estratégia agora");
+        Button strategy = Ui.secondaryButton(this, "Recalcular agora");
         strategy.setOnClickListener(v -> requestStrategy());
         strategyCard.addView(strategy);
         root.addView(strategyCard);
 
-        root.addView(Ui.sectionTitle(this, "Corridas particulares"));
-        Button quote = Ui.button(this, "Criar orçamento particular");
-        quote.setOnClickListener(v -> startActivity(new Intent(this, QuoteActivity.class)));
-        root.addView(quote);
-        Button privateRides = Ui.secondaryButton(this, "Ver orçamentos e corridas");
-        privateRides.setOnClickListener(v -> startActivity(new Intent(this, PrivateRidesActivity.class)));
-        root.addView(privateRides);
-
-        root.addView(Ui.sectionTitle(this, "Ferramentas"));
+        root.addView(Ui.sectionTitle(this, "CONTROLES RÁPIDOS"));
+        Button gross = Ui.secondaryButton(this, "Atualizar ganho");
+        gross.setOnClickListener(v -> showGrossDialog());
         Button dynamic = Ui.secondaryButton(this, "Analisar o mapa dinâmico");
         dynamic.setOnClickListener(v -> requestDynamicMap());
-        root.addView(dynamic);
-        Button settings = Ui.secondaryButton(this, "Meta, regras e áreas de risco");
-        settings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        root.addView(settings);
-        Button backup = Ui.secondaryButton(this, "Salvar backup dos dados");
+        root.addView(actionRow(gross, dynamic));
+        Button backup = Ui.secondaryButton(this, "Salvar backup");
         backup.setOnClickListener(v -> backup());
-        root.addView(backup);
         Button restore = Ui.secondaryButton(this, "Restaurar backup");
         restore.setOnClickListener(v -> chooseRestoreFile());
-        root.addView(restore);
+        root.addView(actionRow(backup, restore));
 
         TextView note = Ui.text(this,
-                "As imagens são analisadas no aparelho e descartadas. O aceite e a recusa continuam manuais.", 13);
+                "Leitura local e inteligente: o OCR acelera quando a tela muda e descansa quando nada acontece.", 12);
         note.setTextColor(Ui.MUTED);
         note.setPadding(0, Ui.dp(this, 16), 0, 0);
         root.addView(note);
-        setContentView(scroll);
+
+        screen.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        screen.addView(bottomNavigation(scroll));
+        setContentView(screen);
+    }
+
+    private TextView addMetric(LinearLayout row, String label, String initialValue, int accent) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(android.view.Gravity.CENTER);
+        card.setPadding(Ui.dp(this, 7), Ui.dp(this, 12), Ui.dp(this, 7), Ui.dp(this, 12));
+        card.setBackground(Ui.rounded(Ui.CARD, 18, Ui.BORDER, this));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, Ui.dp(this, 112), 1);
+        params.setMargins(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 10));
+        card.setLayoutParams(params);
+
+        View stripe = new View(this);
+        stripe.setBackgroundColor(accent);
+        LinearLayout.LayoutParams stripeParams = new LinearLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 4));
+        stripeParams.setMargins(0, 0, 0, Ui.dp(this, 7));
+        card.addView(stripe, stripeParams);
+
+        TextView name = Ui.text(this, label, 10);
+        name.setTextColor(Ui.MUTED);
+        name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        name.setGravity(android.view.Gravity.CENTER);
+        card.addView(name);
+
+        TextView value = Ui.text(this, initialValue, 23);
+        value.setTextColor(Ui.NAVY);
+        value.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        value.setGravity(android.view.Gravity.CENTER);
+        card.addView(value);
+        row.addView(card);
+        return value;
+    }
+
+    private LinearLayout actionRow(Button left, Button right) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams leftParams = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        leftParams.setMargins(0, 0, Ui.dp(this, 5), 0);
+        LinearLayout.LayoutParams rightParams = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        rightParams.setMargins(Ui.dp(this, 5), 0, 0, 0);
+        row.addView(left, leftParams);
+        row.addView(right, rightParams);
+        return row;
+    }
+
+    private LinearLayout bottomNavigation(ScrollView scroll) {
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setGravity(android.view.Gravity.CENTER);
+        nav.setPadding(Ui.dp(this, 8), Ui.dp(this, 7), Ui.dp(this, 8), Ui.dp(this, 8));
+        nav.setBackground(Ui.rounded(Ui.CARD, 0, Ui.BORDER, this));
+        nav.addView(navItem("●\nAGORA", Ui.GREEN, v -> scroll.smoothScrollTo(0, 0)));
+        nav.addView(navItem("◇\nPARTICULAR", Ui.MUTED,
+                v -> startActivity(new Intent(this, QuoteActivity.class))));
+        nav.addView(navItem("≡\nCORRIDAS", Ui.MUTED,
+                v -> startActivity(new Intent(this, PrivateRidesActivity.class))));
+        nav.addView(navItem("⚙\nAJUSTES", Ui.MUTED,
+                v -> startActivity(new Intent(this, SettingsActivity.class))));
+        return nav;
+    }
+
+    private TextView navItem(String label, int color, View.OnClickListener listener) {
+        TextView item = Ui.text(this, label, 10);
+        item.setTextColor(color);
+        item.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        item.setGravity(android.view.Gravity.CENTER);
+        item.setOnClickListener(listener);
+        item.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
+        item.setLayoutParams(new LinearLayout.LayoutParams(0, Ui.dp(this, 58), 1));
+        return item;
     }
 
     private void toggleShift() {
@@ -378,14 +464,19 @@ public final class MainActivity extends Activity {
         DashboardStats stats = database.dashboardStats();
         boolean active = stats.hasActiveSession();
         boolean reading = active && preferences.captureActive();
-        statusPill.setText(active ? "EM JORNADA" : "FORA DE JORNADA");
-        statusPill.setBackground(Ui.rounded(active ? Ui.GREEN : Ui.MUTED, 100, 0, this));
-        captureStatus.setText(reading ? "Tela sendo analisada" : active ? "Leitura desligada" : "GPS e leitura desligados");
+        statusPill.setText(active ? "EM JORNADA" : "PARADO");
+        statusPill.setBackground(Ui.rounded(active ? Ui.GREEN : Ui.CARD_ALT, 100,
+                active ? 0 : Ui.BORDER, this));
+        statusPill.setTextColor(active ? Ui.SURFACE : Ui.MUTED);
+        captureStatus.setText(reading ? "● GPS ativo  •  leitura inteligente ligada"
+                : active ? "● GPS ativo  •  leitura desligada" : "GPS e leitura desligados");
         captureStatus.setTextColor(reading ? Ui.GREEN : Ui.MUTED);
         shiftButton.setText(active ? "ENCERRAR JORNADA" : "INICIAR JORNADA");
         shiftButton.setBackground(Ui.rounded(active ? Ui.RED : Ui.GREEN, 14, 0, this));
+        shiftButton.setTextColor(Ui.SURFACE);
         captureButton.setVisibility(active ? View.VISIBLE : View.GONE);
-        captureButton.setText(reading ? "Parar leitura da tela" : "Ligar leitura da tela");
+        captureButton.setText(reading ? "Parar leitura" : "Ligar leitura");
+        captureButton.setTextColor(reading ? Ui.GREEN : Ui.NAVY);
         overlayButton.setVisibility(active && !Settings.canDrawOverlays(this) ? View.VISIBLE : View.GONE);
         refreshMetricsOnly();
         refreshDecision();
@@ -402,17 +493,23 @@ public final class MainActivity extends Activity {
         double gross = stats.grossCents / 100.0;
         double goal = preferences.dailyGoal();
         double remaining = Math.max(0, goal - gross);
-        grossValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "R$ %.2f", gross));
+        grossValue.setText(money(gross));
         goalDetails.setText(remaining > 0
-                ? String.format(Locale.forLanguageTag("pt-BR"), "Faltam R$ %.2f para R$ %.2f", remaining, goal)
-                : String.format(Locale.forLanguageTag("pt-BR"), "Meta de R$ %.2f alcançada", goal));
+                ? String.format(Locale.forLanguageTag("pt-BR"), "Faltam R$ %.0f para a meta de R$ %.0f", remaining, goal)
+                : String.format(Locale.forLanguageTag("pt-BR"), "Meta de R$ %.0f alcançada", goal));
         goalProgress.setProgress(goal <= 0 ? 0 : (int) Math.min(1000, Math.round(gross / goal * 1000)));
+        hourValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "R$ %.0f", stats.robustGrossPerHour));
+        activeTimeValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d:%02d", worked / 60, worked % 60));
+        offersValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d/%d",
+                stats.viableOffersLastHour, stats.offersLastHour));
         if (stats.hasActiveSession()) {
             paceDetails.setText(String.format(Locale.forLanguageTag("pt-BR"),
-                    "%dh%02d trabalhadas  •  R$ %.2f/h\n%d ofertas na última hora  •  %d dentro da régua",
-                    worked / 60, worked % 60, stats.robustGrossPerHour,
-                    stats.offersLastHour, stats.viableOffersLastHour));
-        } else paceDetails.setText("Jornada ainda não iniciada");
+                    "%.0f%% da meta  •  %d ofertas dentro da régua na última hora",
+                    goal <= 0 ? 0 : Math.min(100, gross / goal * 100), stats.viableOffersLastHour));
+        } else {
+            activeTimeValue.setText("0:00");
+            paceDetails.setText("Toque no valor acima para atualizar o ganho");
+        }
     }
 
     private void refreshDecision() {
@@ -424,15 +521,20 @@ public final class MainActivity extends Activity {
         int color = "ACCEPT".equals(tone) ? Ui.GREEN : "REJECT".equals(tone) ? Ui.RED :
                 "REVIEW".equals(tone) ? Ui.AMBER : Ui.NAVY;
         decisionTitle.setTextColor(color);
-        int pale = "ACCEPT".equals(tone) ? Color.rgb(235, 247, 241) :
-                "REJECT".equals(tone) ? Color.rgb(255, 239, 237) :
-                "REVIEW".equals(tone) ? Color.rgb(255, 246, 230) : Color.WHITE;
-        decisionCard.setBackground(Ui.rounded(pale, 18, Ui.BORDER, this));
+        decisionCard.setBackground(Ui.rounded(Ui.CARD, 18,
+                "NEUTRAL".equals(tone) ? Ui.BORDER : color, this));
         if (preferences.lastDecisionAt() > 0) {
             String time = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.forLanguageTag("pt-BR"))
                     .format(new Date(preferences.lastDecisionAt()));
             decisionDetails.setText(details + "\nLida às " + time);
         }
+    }
+
+    private String money(double value) {
+        if (Math.abs(value - Math.rint(value)) < 0.005) {
+            return String.format(Locale.forLanguageTag("pt-BR"), "R$ %.0f", value);
+        }
+        return String.format(Locale.forLanguageTag("pt-BR"), "R$ %.2f", value);
     }
 
     private void backup() {

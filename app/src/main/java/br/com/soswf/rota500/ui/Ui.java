@@ -14,13 +14,16 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 final class Ui {
-    static final int NAVY = Color.rgb(11, 31, 42);
-    static final int GREEN = Color.rgb(8, 122, 82);
-    static final int RED = Color.rgb(179, 38, 30);
-    static final int AMBER = Color.rgb(185, 106, 0);
-    static final int SURFACE = Color.rgb(243, 246, 245);
-    static final int MUTED = Color.rgb(79, 95, 103);
-    static final int BORDER = Color.rgb(215, 224, 221);
+    static final int SURFACE = Color.rgb(7, 12, 18);
+    static final int CARD = Color.rgb(18, 27, 37);
+    static final int CARD_ALT = Color.rgb(24, 35, 48);
+    static final int NAVY = Color.rgb(244, 247, 251);
+    static final int GREEN = Color.rgb(73, 228, 140);
+    static final int RED = Color.rgb(255, 95, 100);
+    static final int AMBER = Color.rgb(255, 202, 58);
+    static final int BLUE = Color.rgb(72, 169, 255);
+    static final int MUTED = Color.rgb(143, 157, 174);
+    static final int BORDER = Color.rgb(42, 56, 73);
 
     private Ui() { }
 
@@ -48,7 +51,7 @@ final class Ui {
         TextView view = new TextView(context);
         view.setText(text);
         view.setTextSize(size);
-        view.setTextColor(Color.rgb(32, 45, 55));
+        view.setTextColor(NAVY);
         view.setLineSpacing(0, 1.08f);
         view.setPadding(0, dp(context, 5), 0, dp(context, 5));
         return view;
@@ -69,32 +72,32 @@ final class Ui {
         card.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(context, 18);
         card.setPadding(padding, padding, padding, padding);
-        card.setBackground(rounded(Color.WHITE, 18, BORDER, context));
+        card.setBackground(rounded(CARD, 18, BORDER, context));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, dp(context, 8), 0, dp(context, 8));
         card.setLayoutParams(params);
-        card.setElevation(dp(context, 1));
+        card.setElevation(0);
         return card;
     }
 
     static Button button(Context context, String text) {
-        return actionButton(context, text, GREEN, Color.WHITE);
+        return actionButton(context, text, GREEN, SURFACE);
     }
 
     static Button primaryButton(Context context, String text) {
-        Button button = actionButton(context, text, GREEN, Color.WHITE);
+        Button button = actionButton(context, text, GREEN, SURFACE);
         button.setTextSize(19);
         button.setMinHeight(dp(context, 64));
         return button;
     }
 
     static Button secondaryButton(Context context, String text) {
-        return actionButton(context, text, Color.WHITE, NAVY);
+        return actionButton(context, text, CARD_ALT, NAVY);
     }
 
     static Button dangerButton(Context context, String text) {
-        return actionButton(context, text, RED, Color.WHITE);
+        return actionButton(context, text, RED, SURFACE);
     }
 
     private static Button actionButton(Context context, String text, int background, int foreground) {
@@ -107,7 +110,7 @@ final class Ui {
         button.setGravity(Gravity.CENTER);
         button.setMinHeight(dp(context, 54));
         button.setPadding(dp(context, 14), dp(context, 10), dp(context, 14), dp(context, 10));
-        button.setBackground(rounded(background, 14, background == Color.WHITE ? BORDER : 0, context));
+        button.setBackground(rounded(background, 14, background == CARD_ALT ? BORDER : 0, context));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, dp(context, 5), 0, dp(context, 5));
@@ -132,9 +135,10 @@ final class Ui {
         field.setText(value);
         field.setTextSize(17);
         field.setTextColor(NAVY);
+        field.setHintTextColor(MUTED);
         field.setSingleLine(!label.toLowerCase().contains("observa"));
         field.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10));
-        field.setBackground(rounded(Color.WHITE, 10, BORDER, context));
+        field.setBackground(rounded(CARD_ALT, 10, BORDER, context));
         if (numeric) field.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);

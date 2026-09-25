@@ -56,8 +56,14 @@ public final class ScreenCaptureService extends Service {
     private static final String CHANNEL = "rota500_screen_reader_v2";
     private static final int NOTIFICATION_ID = 501;
     // A tela é lida continuamente. Quadros antigos são descartados enquanto o OCR trabalha.
-    private static final long OCR_INTERVAL_MS = 50L;
+    private static final int CAPTURE_MAX_WIDTH = 720;
+    private static final long FRAME_CHECK_INTERVAL_MS = 80L;
+    private static final long CHANGED_SCREEN_OCR_INTERVAL_MS = 450L;
+    private static final long IDLE_SCREEN_OCR_INTERVAL_MS = 2_500L;
     private static final long SAME_OFFER_COOLDOWN_MS = 8_000L;
+    private static final int SAMPLE_COLUMNS = 8;
+    private static final int SAMPLE_ROWS = 12;
+    private static final int SAMPLE_CHANGE_POINTS = 16;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final OfferTextParser parser = new OfferTextParser();
@@ -73,9 +79,13 @@ public final class ScreenCaptureService extends Service {
     private ImageReader imageReader;
     private boolean processing;
     private long lastOcrAt;
+    private long lastFrameCheckAt;
     private long lastOfferAt;
     private long lastOfferSeenAt;
     private String lastOfferHash = "";
+    private final int[] lastScreenSample = new int[SAMPLE_COLUMNS * SAMPLE_ROWS];
+    private final int[] currentScreenSample = new int[SAMPLE_COLUMNS * SAMPLE_ROWS];
+    private boolean hasScreenSample;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -136,9 +146,12 @@ public final class ScreenCaptureService extends Service {
 
         WindowManager windowManager = getSystemService(WindowManager.class);
         Rect bounds = windowManager.getMaximumWindowMetrics().getBounds();
-        int width = Math.max(1, bounds.width());
-        int height = Math.max(1, bounds.height());
-        int density = getResources().getConfiguration().densityDpi;
+        int nativeWidth = Math.max(1, bounds.width());
+        int nativeHeight = Math.max(1, bounds.height());
+        float scale = nativeWidth > CAPTURE_MAX_WIDTH ? CAPTURE_MAX_WIDTH / (float) nativeWidth : 1f;
+        int width = Math.max(1, Math.round(nativeWidth * scale));
+        int height = Math.max(1, Math.round(nativeHeight * scale));
+        int density = Math.max(72, Math.round(getResources().getConfiguration().densityDpi * scale));
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
         imageReader.setOnImageAvailableListener(this::onImageAvailable, captureHandler);
         virtualDisplay = projection.createVirtualDisplay(
@@ -153,11 +166,16 @@ public final class ScreenCaptureService extends Service {
             image = reader.acquireLatestImage();
             if (image == null) return;
             long now = System.currentTimeMillis();
-            if (processing || now - lastOcrAt < OCR_INTERVAL_MS) return;
+            if (processing || now - lastFrameCheckAt < FRAME_CHECK_INTERVAL_MS) return;
+            lastFrameCheckAt = now;
+            boolean changed = screenChanged(image);
+            long interval = changed ? CHANGED_SCREEN_OCR_INTERVAL_MS : IDLE_SCREEN_OCR_INTERVAL_MS;
+            if (now - lastOcrAt < interval) return;
             if (database.activeSessionId() <= 0) {
                 mainHandler.post(this::stopCapture);
                 return;
             }
+            rememberCurrentScreenSample();
             lastOcrAt = now;
             processing = true;
             Bitmap bitmap = bitmapFrom(image);
@@ -171,6 +189,53 @@ public final class ScreenCaptureService extends Service {
         } finally {
             if (image != null) image.close();
         }
+    }
+
+    private boolean screenChanged(Image image) {
+        if (image.getPlanes().length == 0) return true;
+        Image.Plane plane = image.getPlanes()[0];
+        ByteBuffer buffer = plane.getBuffer();
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int pixelStride = plane.getPixelStride();
+        int rowStride = plane.getRowStride();
+        int startY = height * 35 / 100;
+        int usableHeight = Math.max(1, height - startY - 1);
+        int changedPoints = 0;
+        int index = 0;
+        try {
+            for (int row = 0; row < SAMPLE_ROWS; row++) {
+                int y = startY + (row * usableHeight / Math.max(1, SAMPLE_ROWS - 1));
+                for (int column = 0; column < SAMPLE_COLUMNS; column++) {
+                    int x = column * Math.max(1, width - 1) / Math.max(1, SAMPLE_COLUMNS - 1);
+                    int offset = y * rowStride + x * pixelStride;
+                    int red = buffer.get(offset) & 0xff;
+                    int green = buffer.get(offset + 1) & 0xff;
+                    int blue = buffer.get(offset + 2) & 0xff;
+                    int color = (red << 16) | (green << 8) | blue;
+                    currentScreenSample[index] = color;
+                    if (hasScreenSample && colorDistance(color, lastScreenSample[index]) >= 84) {
+                        changedPoints++;
+                    }
+                    index++;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            return true;
+        }
+        return !hasScreenSample || changedPoints >= SAMPLE_CHANGE_POINTS;
+    }
+
+    private int colorDistance(int first, int second) {
+        int red = Math.abs(((first >> 16) & 0xff) - ((second >> 16) & 0xff));
+        int green = Math.abs(((first >> 8) & 0xff) - ((second >> 8) & 0xff));
+        int blue = Math.abs((first & 0xff) - (second & 0xff));
+        return red + green + blue;
+    }
+
+    private void rememberCurrentScreenSample() {
+        System.arraycopy(currentScreenSample, 0, lastScreenSample, 0, currentScreenSample.length);
+        hasScreenSample = true;
     }
 
     private Bitmap bitmapFrom(Image image) {
