@@ -11,6 +11,16 @@ public final class AppPreferences {
 
     public AppPreferences(Context context) {
         preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE);
+        // Versões antigas exibiam "CONFERIR". A partir da 0.3, leituras incompletas
+        // são descartadas e o motorista só recebe ACEITAR ou RECUSAR.
+        if ("REVIEW".equals(preferences.getString("last_decision_tone", ""))) {
+            preferences.edit()
+                    .putString("last_decision_title", "Aguardando oferta")
+                    .putString("last_decision_details", "A leitura anterior incompleta foi descartada.")
+                    .putString("last_decision_tone", "NEUTRAL")
+                    .remove("last_decision_at")
+                    .apply();
+        }
     }
 
     public double dailyGoal() { return readDouble("daily_goal", 500.0); }

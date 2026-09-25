@@ -36,6 +36,8 @@ import java.util.Locale;
 
 import br.com.soswf.rota500.R;
 import br.com.soswf.rota500.accessibility.DynamicHeatAnalyzer;
+import br.com.soswf.rota500.core.DecisionPresentation;
+import br.com.soswf.rota500.core.DecisionRules;
 import br.com.soswf.rota500.core.OfferData;
 import br.com.soswf.rota500.core.OfferRuleEngine;
 import br.com.soswf.rota500.core.OfferTextParser;
@@ -54,7 +56,7 @@ public final class ScreenCaptureService extends Service {
     private static final String CHANNEL = "rota500_screen_reader_v2";
     private static final int NOTIFICATION_ID = 501;
     // A tela é lida continuamente. Quadros antigos são descartados enquanto o OCR trabalha.
-    private static final long OCR_INTERVAL_MS = 350L;
+    private static final long OCR_INTERVAL_MS = 100L;
     private static final long OFFER_COOLDOWN_MS = 750L;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -193,14 +195,33 @@ public final class ScreenCaptureService extends Service {
             DynamicHeatAnalyzer.Result result = new DynamicHeatAnalyzer().analyze(bitmap);
             database.insertDynamicObservation("Experimental: " + result.level, result.warmRatio);
         }
-        InputImage input = InputImage.fromBitmap(bitmap, 0);
+        Bitmap ocrBitmap = prepareForOcr(bitmap);
+        if (ocrBitmap != bitmap) bitmap.recycle();
+        InputImage input = InputImage.fromBitmap(ocrBitmap, 0);
         recognizer.process(input)
                 .addOnSuccessListener(this::handleRecognizedText)
                 .addOnFailureListener(error -> { })
                 .addOnCompleteListener(task -> {
-                    bitmap.recycle();
+                    ocrBitmap.recycle();
                     processing = false;
                 });
+    }
+
+    private Bitmap prepareForOcr(Bitmap source) {
+        try {
+            // As ofertas da Uber e da 99 ocupam a parte central/inferior da tela.
+            // Remover a faixa superior e limitar a largura reduz bastante o tempo do OCR.
+            int top = Math.max(0, source.getHeight() / 5);
+            Bitmap cropped = Bitmap.createBitmap(
+                    source, 0, top, source.getWidth(), source.getHeight() - top);
+            if (cropped.getWidth() <= 720) return cropped;
+            int scaledHeight = Math.max(1, Math.round(cropped.getHeight() * 720f / cropped.getWidth()));
+            Bitmap scaled = Bitmap.createScaledBitmap(cropped, 720, scaledHeight, true);
+            if (scaled != cropped) cropped.recycle();
+            return scaled;
+        } catch (RuntimeException ignored) {
+            return source;
+        }
     }
 
     private void handleRecognizedText(Text result) {
@@ -213,33 +234,26 @@ public final class ScreenCaptureService extends Service {
         if (!looksLikeOffer(lines)) return;
         String joined = String.join(" ", lines);
         OfferData offer = parser.parse(platformFor(joined), lines);
+        DecisionRules rules = preferences.decisionRules();
+        boolean unsafe = database.isDestinationUnsafe(offer.destination);
+        RuleDecision decision = ruleEngine.evaluate(offer, rules, unsafe);
+        // Uma leitura parcial não deve virar uma orientação vaga. O quadro seguinte
+        // será analisado imediatamente e só uma decisão binária será mostrada.
+        if (decision.outcome == RuleDecision.Outcome.REVIEW) return;
         long now = System.currentTimeMillis();
         if (offer.fareCents <= 0 || offer.sourceHash.equals(lastOfferHash)
                 || now - lastOfferAt < OFFER_COOLDOWN_MS) return;
         lastOfferHash = offer.sourceHash;
         lastOfferAt = now;
-        boolean unsafe = database.isDestinationUnsafe(offer.destination);
-        RuleDecision decision = ruleEngine.evaluate(offer, preferences.decisionRules(), unsafe);
         if (!database.insertOffer(offer, decision, unsafe)) return;
-        publishDecision(offer, decision);
+        publishDecision(offer, decision, rules);
     }
 
-    private void publishDecision(OfferData offer, RuleDecision decision) {
-        String title;
-        String tone;
-        if (decision.outcome == RuleDecision.Outcome.ACCEPTABLE) {
-            title = "ACEITAR";
-            tone = "ACCEPT";
-        } else if (decision.outcome == RuleDecision.Outcome.AUTO_REJECT) {
-            title = "RECUSAR";
-            tone = "REJECT";
-        } else {
-            title = "CONFERIR";
-            tone = "REVIEW";
-        }
-        String details = offer.compactSummary() + "\n" + decision.reason;
-        preferences.setLastDecision(title, details, tone);
-        mainHandler.post(() -> decisionAlert.show(title, details, tone));
+    private void publishDecision(OfferData offer, RuleDecision decision, DecisionRules rules) {
+        DecisionPresentation presentation = DecisionPresentation.from(offer, decision, rules);
+        preferences.setLastDecision(
+                presentation.finalAdvice, presentation.compactDetails(), presentation.tone);
+        mainHandler.post(() -> decisionAlert.show(presentation));
         broadcast(ACTION_DECISION);
     }
 
@@ -251,7 +265,7 @@ public final class ScreenCaptureService extends Service {
         boolean action = text.contains("aceitar") || text.contains("recusar")
                 || text.contains("rejeitar") || text.contains("solicitação")
                 || text.contains("solicitacao") || text.contains("nova corrida")
-                || text.contains("nova viagem");
+                || text.contains("nova viagem") || text.contains("selecionar");
         return money && distance && time && action;
     }
 

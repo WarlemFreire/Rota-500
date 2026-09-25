@@ -23,7 +23,7 @@ import br.com.soswf.rota500.core.StrategyAdvice;
 
 public final class AppDatabase extends SQLiteOpenHelper {
     private static final String NAME = "rota500.db";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static final String[] BACKUP_TABLES = {"work_sessions", "offers", "location_points",
             "gross_snapshots", "private_quotes", "risk_zones", "strategy_events",
             "dynamic_observations", "learning_buckets"};
@@ -42,7 +42,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
 
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE work_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, start_at INTEGER NOT NULL, end_at INTEGER, gross_cents INTEGER NOT NULL DEFAULT 0, start_zone TEXT, end_zone TEXT, learned INTEGER NOT NULL DEFAULT 0)");
-        db.execSQL("CREATE TABLE offers (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, captured_at INTEGER NOT NULL, platform TEXT, fare_cents INTEGER, pickup_km REAL, trip_km REAL, pickup_minutes INTEGER, trip_minutes INTEGER, destination TEXT, source_hash TEXT NOT NULL, confidence REAL, decision TEXT, reason TEXT, unsafe INTEGER NOT NULL DEFAULT 0, UNIQUE(session_id,source_hash))");
+        db.execSQL("CREATE TABLE offers (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, captured_at INTEGER NOT NULL, platform TEXT, fare_cents INTEGER, pickup_km REAL, trip_km REAL, pickup_minutes INTEGER, trip_minutes INTEGER, passenger_rating REAL, destination TEXT, source_hash TEXT NOT NULL, confidence REAL, decision TEXT, reason TEXT, unsafe INTEGER NOT NULL DEFAULT 0, UNIQUE(session_id,source_hash))");
         db.execSQL("CREATE TABLE location_points (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, captured_at INTEGER NOT NULL, latitude REAL, longitude REAL, accuracy REAL, speed REAL, provider TEXT)");
         db.execSQL("CREATE TABLE private_quotes (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, client_name TEXT, phone TEXT, scheduled_at TEXT, origin TEXT, destination TEXT, stops TEXT, passengers INTEGER, luggage TEXT, trip_type TEXT, payment TEXT, notes TEXT, input_json TEXT, result_json TEXT, status TEXT NOT NULL DEFAULT 'ORÇAMENTO')");
         db.execSQL("CREATE TABLE risk_zones (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, latitude REAL, longitude REAL, radius_m REAL NOT NULL DEFAULT 600, active INTEGER NOT NULL DEFAULT 1)");
@@ -59,6 +59,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) db.execSQL("CREATE TABLE IF NOT EXISTS gross_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, captured_at INTEGER NOT NULL, gross_cents INTEGER NOT NULL)");
+        if (oldVersion < 3) db.execSQL("ALTER TABLE offers ADD COLUMN passenger_rating REAL");
     }
 
     public synchronized long beginSession(String startZone) {
@@ -126,6 +127,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
         values.put("trip_km", offer.tripKm);
         values.put("pickup_minutes", offer.pickupMinutes);
         values.put("trip_minutes", offer.tripMinutes);
+        values.put("passenger_rating", offer.passengerRating);
         values.put("destination", offer.destination);
         values.put("source_hash", offer.sourceHash);
         values.put("confidence", offer.confidence);

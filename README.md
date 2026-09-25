@@ -23,7 +23,7 @@ O APK do MVP contém apenas bibliotecas nativas ARM de 64 bits, compatíveis com
 
 1. Abra **Regras e configurações**. Confira meta, custo total por quilômetro, régua de R$/km, jornada e áreas de risco.
 2. Toque em **Iniciar jornada**, permita localização e autorize o compartilhamento da tela inteira. A imagem não é gravada: os quadros são processados na memória e descartados.
-3. Para enxergar **ACEITAR**, **RECUSAR** ou **CONFERIR** sobre a tela da Uber e da 99, toque em **Mostrar decisão sobre Uber e 99** e libere a sobreposição. Sem essa autorização, a recomendação aparece como notificação.
+3. Para enxergar o semáforo de **KM**, **HORA** e **NOTA**, seguido de **ACEITAR** ou **RECUSAR**, toque em **Mostrar decisão sobre Uber e 99** e libere a sobreposição. Sem essa autorização, a recomendação aparece como notificação.
 4. Faça a calibração com ofertas reais. Confira valor, tempo, quilometragem e destino lidos pelo aplicativo. O aceite e a recusa são manuais.
 5. Atualize o **bruto acumulado da jornada atual** periodicamente, somando Uber, 99 e corridas particulares. O painel soma as jornadas iniciadas no mesmo dia. O app ainda não lê o faturamento realizado diretamente dos extratos das plataformas.
 6. Faça um backup dos dados em uma pasta escolhida pelo seletor do Android. Se o provedor Google Drive do aparelho permitir seleção de pasta e gravação, ela pode ser usada. Restauração pelo arquivo JSON é feita no painel, depois de encerrar a jornada.

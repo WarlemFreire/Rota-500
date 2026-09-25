@@ -5,8 +5,11 @@ import java.util.List;
 public final class CoreSelfTest {
     public static void main(String[] args) {
         parsesOffer();
+        parsesRealUberCard();
         rejectsAmbiguousScreen();
         appliesRules();
+        rejectsVeryLowPassengerRating();
+        buildsTrafficLightDecision();
         respectsOperatingCost();
         calculatesPrivateQuote();
         resistsHourlyOutlier();
@@ -15,7 +18,7 @@ public final class CoreSelfTest {
         reviewsUncertainUnsafeOffer();
         stopsAtGoal();
         learnsIncrementally();
-        System.out.println("CoreSelfTest: 11 testes aprovados");
+        System.out.println("CoreSelfTest: 14 testes aprovados");
     }
 
     private static void parsesOffer() {
@@ -29,6 +32,20 @@ public final class CoreSelfTest {
         check(offer.confidence > 0.9, "confiança da leitura");
     }
 
+    private static void parsesRealUberCard() {
+        OfferData offer = new OfferTextParser().parse("UBER", List.of(
+                "UberX", "R$ 7,34", "R$1,63/km aprox.", "★ 4,89 (736)",
+                "5 min (1.1 km)", "R. Dr. Barros Júnior, Santa Catarina, Nova Iguaçu",
+                "10 minutos (3.4 km)", "Rua Marlene de Oliveira, 18, Santa Eugênia, Nova Iguaçu",
+                "Selecionar"));
+        check(offer.fareCents == 734, "não confundir valor da corrida com valor por km");
+        close(offer.passengerRating, 4.89, "nota do passageiro");
+        close(offer.totalKm(), 4.5, "distância total da oferta real");
+        check(offer.totalMinutes() == 15, "tempo total da oferta real");
+        check(offer.destination.startsWith("Rua Marlene"), "destino da oferta real");
+        check(offer.confidence > 0.95, "oferta real deve ter leitura completa");
+    }
+
     private static void appliesRules() {
         OfferData low = new OfferData("99", 1500, 3, 12, 8, 25, "", "x", 0.9);
         RuleDecision decision = new OfferRuleEngine().evaluate(low, DecisionRules.defaults(), false);
@@ -37,6 +54,25 @@ public final class CoreSelfTest {
         OfferData uncertain = new OfferData("99", 1500, 3, 12, 8, 25, "", "x", 0.3);
         decision = new OfferRuleEngine().evaluate(uncertain, DecisionRules.defaults(), false);
         check(decision.outcome == RuleDecision.Outcome.REVIEW, "não recusar leitura incerta");
+    }
+
+    private static void rejectsVeryLowPassengerRating() {
+        OfferData offer = new OfferData("UBER", 2400, 1, 8, 4, 18,
+                4.65, "Centro", "rating", 1);
+        RuleDecision decision = new OfferRuleEngine().evaluate(offer, DecisionRules.defaults(), false);
+        check(decision.outcome == RuleDecision.Outcome.AUTO_REJECT, "recusa nota muito baixa");
+    }
+
+    private static void buildsTrafficLightDecision() {
+        OfferData offer = new OfferData("UBER", 734, 1.1, 3.4, 5, 10,
+                4.89, "Santa Eugênia", "traffic", 1);
+        DecisionRules rules = DecisionRules.defaults();
+        RuleDecision decision = new OfferRuleEngine().evaluate(offer, rules, false);
+        DecisionPresentation display = DecisionPresentation.from(offer, decision, rules);
+        check("ACEITAR".equals(display.finalAdvice), "decisão final binária");
+        check(display.kmLight == DecisionPresentation.Light.GREEN, "km verde");
+        check(display.hourLight == DecisionPresentation.Light.YELLOW, "hora amarela em corrida curta");
+        check(display.ratingLight == DecisionPresentation.Light.GREEN, "nota verde");
     }
 
     private static void rejectsAmbiguousScreen() {

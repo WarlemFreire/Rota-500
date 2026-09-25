@@ -10,9 +10,15 @@ import java.util.regex.Pattern;
 
 public final class OfferTextParser {
     private static final Pattern MONEY = Pattern.compile("R\\$\\s*([0-9]{1,4}(?:[.,][0-9]{2})?)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RATE_PER_KM = Pattern.compile(
+            "R\\$\\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)\\s*/\\s*km", Pattern.CASE_INSENSITIVE);
     private static final Pattern KM = Pattern.compile("([0-9]{1,3}(?:[.,][0-9]{1,2})?)\\s*km", Pattern.CASE_INSENSITIVE);
     private static final Pattern MINUTES = Pattern.compile("([0-9]{1,3})\\s*min", Pattern.CASE_INSENSITIVE);
     private static final Pattern DESTINATION = Pattern.compile("(?:destino|para|sentido)[:\\s]+([^|•\\n]{3,80})", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RATING_WITH_COUNT = Pattern.compile(
+            "(?<![0-9])([1-5](?:[.,][0-9]{1,2}))\\s*\\(\\s*[0-9.]{1,8}\\s*\\)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RATING_WITH_LABEL = Pattern.compile(
+            "(?:nota|★|☆|⭐)\\s*:?\\s*([1-5](?:[.,][0-9]{1,2}))", Pattern.CASE_INSENSITIVE);
 
     public OfferData parse(String platform, List<String> visibleTexts) {
         String joined = normalize(visibleTexts);
@@ -20,7 +26,9 @@ public final class OfferTextParser {
         long fare = reading.value;
         List<Double> kms = parseDoubles(KM, joined);
         List<Integer> mins = parseIntegers(MINUTES, joined);
-        String destination = parseDestination(joined);
+        double shownRatePerKm = parseFirstDouble(RATE_PER_KM, joined);
+        double passengerRating = parseRating(joined);
+        String destination = parseDestination(joined, visibleTexts);
 
         double pickupKm = kms.size() > 1 ? kms.get(0) : 0;
         double tripKm = kms.isEmpty() ? 0 : kms.get(kms.size() > 1 ? 1 : 0);
@@ -34,9 +42,14 @@ public final class OfferTextParser {
         if (platform != null && !platform.isBlank()) confidence += 0.10;
         // Uma oferta sem embarque ou com outros preços na mesma tela exige conferência manual.
         if (reading.ambiguous || kms.size() != 2 || mins.size() != 2) confidence = Math.min(confidence, 0.60);
+        double calculatedRate = pickupKm + tripKm <= 0 ? 0 : (fare / 100.0) / (pickupKm + tripKm);
+        if (shownRatePerKm > 0 && calculatedRate > 0
+                && Math.abs(shownRatePerKm - calculatedRate) > Math.max(0.18, shownRatePerKm * 0.12)) {
+            confidence = Math.min(confidence, 0.60);
+        }
 
         String signature = platform + "|" + fare + "|" + pickupKm + "|" + tripKm
-                + "|" + pickupMinutes + "|" + tripMinutes + "|" + destination;
+                + "|" + pickupMinutes + "|" + tripMinutes + "|" + passengerRating + "|" + destination;
 
         return new OfferData(
                 platform,
@@ -45,6 +58,7 @@ public final class OfferTextParser {
                 tripKm,
                 pickupMinutes,
                 tripMinutes,
+                passengerRating,
                 destination,
                 sha256(signature),
                 confidence);
@@ -56,6 +70,8 @@ public final class OfferTextParser {
         boolean ambiguous = false;
         while (matcher.find()) {
             try {
+                String suffix = text.substring(matcher.end());
+                if (suffix.matches("(?is)^\\s*(?:/|por)\\s*(?:km|h|hora).*")) continue;
                 long candidate = Math.round(Double.parseDouble(matcher.group(1).replace(',', '.')) * 100);
                 if (amount != 0 && amount != candidate) ambiguous = true;
                 if (amount == 0) amount = candidate;
@@ -64,6 +80,21 @@ public final class OfferTextParser {
             }
         }
         return new FareReading(amount, ambiguous);
+    }
+
+    private double parseFirstDouble(Pattern pattern, String text) {
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) return 0;
+        try {
+            return Double.parseDouble(matcher.group(1).replace(',', '.'));
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    private double parseRating(String text) {
+        double value = parseFirstDouble(RATING_WITH_COUNT, text);
+        return value > 0 ? value : parseFirstDouble(RATING_WITH_LABEL, text);
     }
 
     private List<Double> parseDoubles(Pattern pattern, String text) {
@@ -92,9 +123,27 @@ public final class OfferTextParser {
         return values;
     }
 
-    private String parseDestination(String text) {
+    private String parseDestination(String text, List<String> visibleTexts) {
         Matcher matcher = DESTINATION.matcher(text);
-        return matcher.find() ? matcher.group(1).trim() : "";
+        if (matcher.find()) return matcher.group(1).trim();
+        int routeRows = 0;
+        if (visibleTexts == null) return "";
+        for (int index = 0; index < visibleTexts.size(); index++) {
+            String line = visibleTexts.get(index) == null ? "" : visibleTexts.get(index).trim();
+            if (MINUTES.matcher(line).find() && KM.matcher(line).find()) {
+                routeRows++;
+                if (routeRows < 2) continue;
+                for (int next = index + 1; next < visibleTexts.size() && next <= index + 2; next++) {
+                    String candidate = visibleTexts.get(next) == null ? "" : visibleTexts.get(next).trim();
+                    String lower = candidate.toLowerCase(Locale.ROOT);
+                    if (candidate.length() >= 5 && !lower.contains("selecionar")
+                            && !lower.contains("aceitar") && !lower.contains("recusar")) {
+                        return candidate;
+                    }
+                }
+            }
+        }
+        return "";
     }
 
     private String normalize(List<String> texts) {

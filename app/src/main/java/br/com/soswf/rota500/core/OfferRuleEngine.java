@@ -10,6 +10,9 @@ public final class OfferRuleEngine {
         if (unsafePickupOrDestination) {
             return new RuleDecision(RuleDecision.Outcome.AUTO_REJECT, "Área cadastrada como proibida");
         }
+        if (offer.passengerRating > 0 && offer.passengerRating < rules.minimumPassengerRating) {
+            return new RuleDecision(RuleDecision.Outcome.AUTO_REJECT, "Nota do passageiro abaixo da régua");
+        }
         if (offer.totalKm() <= 0 || offer.totalMinutes() <= 0 || offer.fareCents <= 0) {
             return new RuleDecision(RuleDecision.Outcome.REVIEW, "Dados insuficientes para decidir");
         }
