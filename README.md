@@ -2,11 +2,13 @@
 
 Projeto Android nativo, em Java, para apoiar um motorista de Uber e 99. A meta inicial é R$ 500 brutos por dia. O app observa ofertas durante uma jornada iniciada pelo motorista, mostra uma avaliação na tela, guarda localização e resultados, calcula orçamentos particulares e aprende padrões de faturamento a partir dos totais informados.
 
-Este pacote contém **código-fonte**. Ainda não contém APK: o ambiente em que foi criado não disponibilizou Android SDK nem Gradle, e o acesso aos downloads oficiais foi bloqueado. Os testes do núcleo e a validação de sintaxe foram executados; a compilação Android e a calibração em um aparelho real ainda precisam ocorrer.
+O projeto foi compilado no GitHub Actions em 25/09/2026. Os testes do núcleo, a validação de sintaxe e a montagem do APK Android foram concluídos. A calibração em um aparelho real ainda precisa ocorrer.
 
 O arquivo `CLOUD_BUILD.md` explica a compilação no GitHub Actions pelo celular. O fluxo de trabalho está em `.github/workflows/build-apk.yml`. Use apenas um repositório privado.
 
-## Compilar
+## Compilar novamente
+
+O fluxo `.github/workflows/build-apk.yml` compila automaticamente cada atualização da branch `main` e disponibiliza o artefato `Rota500-apk-debug`. Para uma compilação local:
 
 1. Instale Android Studio com JDK 17, Android SDK Platform 36 e Build Tools 36.0.0.
 2. Abra a pasta `rota500` como projeto no Android Studio. O projeto usa Android Gradle Plugin 9.3.3 e Gradle 9.5.0. O arquivo `gradle/wrapper/gradle-wrapper.properties` registra a versão, mas **não há `gradlew` nem `gradle-wrapper.jar`** neste pacote. Configure a distribuição Gradle 9.5.0 na IDE ou gere um wrapper padrão em um ambiente que já possua Gradle.

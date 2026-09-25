@@ -9,7 +9,8 @@
 | Sintaxe Java (`./run-static-checks.sh`) | 31 arquivos válidos |
 | XML do projeto | 6 arquivos válidos |
 | Modelo proibido no código do aplicativo | Nenhuma ocorrência |
-| Compilação Android (`:app:assembleDebug`) | Bloqueada: Android SDK, Gradle e wrapper não estão instalados |
+| Compilação Android (`:app:assembleDebug`) | Aprovada no GitHub Actions em 25/09/2026 |
+| Integridade do APK | Arquivo ZIP interno válido e APK com bloco de assinatura |
 | Teste no telefone com Uber e 99 | Pendente |
 
-Tentativas de conexão a `services.gradle.org` e `dl.google.com` expiraram neste ambiente. A aprovação dos testes Java não significa que a interface Android compilou ou que a leitura por acessibilidade funcionará com as versões instaladas da Uber e da 99. O próximo teste deve gerar o APK em Android Studio, corrigir erros de compilação que apareçam e então calibrar as telas em um telefone real.
+O fluxo de compilação confirmou Java 17, Gradle 9.5, Android SDK 36 e Build Tools 36.0.0. Os 11 testes do núcleo passaram novamente antes da montagem do APK. A próxima etapa depende de teste físico para conferir permissões, interface, coleta de localização e leitura das telas instaladas da Uber e da 99.
