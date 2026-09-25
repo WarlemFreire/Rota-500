@@ -23,6 +23,7 @@ public final class PrivateRidesActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Ui.SURFACE);
         int p = (int) (18 * getResources().getDisplayMetrics().density);
         root.setPadding(p, p, p, p);
         scroll.addView(root);

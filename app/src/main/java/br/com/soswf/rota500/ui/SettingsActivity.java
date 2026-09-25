@@ -8,7 +8,6 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -25,7 +24,6 @@ public final class SettingsActivity extends Activity {
     private AppPreferences preferences;
     private EditText goal, plannedHours, minKm, minLongHour, costKm, desiredNet, weather;
     private EditText endpoint, model, apiKey, strategyHours;
-    private CheckBox calibration, autoReject;
     private TextView riskList;
 
     @Override protected void onCreate(Bundle state) {
@@ -34,10 +32,13 @@ public final class SettingsActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Ui.SURFACE);
         int p = (int) (18 * getResources().getDisplayMetrics().density);
         root.setPadding(p, p, p, p);
         scroll.addView(root);
-        root.addView(Ui.title(this, "Regras e configurações"));
+        root.addView(Ui.title(this, "Meta e regras"));
+
+        root.addView(Ui.sectionTitle(this, "Objetivo da jornada"));
 
         goal = Ui.field(this, root, "Meta bruta diária (R$)", number(preferences.dailyGoal()), true);
         plannedHours = Ui.field(this, root, "Jornada planejada (horas, máximo eficiente 12)", number(preferences.plannedMinutes() / 60.0), true);
@@ -48,7 +49,7 @@ public final class SettingsActivity extends Activity {
         desiredNet = Ui.field(this, root, "Líquido desejado em particular (R$/h)", number(preferences.desiredNetPerHour()), true);
         weather = Ui.field(this, root, "Clima atual (correção manual)", preferences.weather(), false);
 
-        root.addView(Ui.text(this, "IA estratégica opcional", 20));
+        root.addView(Ui.sectionTitle(this, "IA estratégica opcional"));
         root.addView(Ui.text(this, "Use qualquer provedor barato com API HTTPS compatível com chat-completions. Apenas dados agregados são enviados. Sem configuração, o motor local continua funcionando.", 13));
         endpoint = Ui.field(this, root, "Endpoint completo HTTPS", preferences.aiEndpoint(), false);
         model = Ui.field(this, root, "Identificador do modelo econômico", preferences.aiModel(), false);
@@ -56,18 +57,7 @@ public final class SettingsActivity extends Activity {
         apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         strategyHours = Ui.field(this, root, "Intervalo da estratégia externa (1 a 24 horas)", number(preferences.strategyIntervalMinutes() / 60.0), true);
 
-        root.addView(Ui.text(this, "Automação de recusa", 20));
-        root.addView(Ui.text(this, "O aceite é sempre manual. A recusa usa somente as regras fixas, após atraso técnico, e pode parar de funcionar quando Uber ou 99 alterarem a tela.", 13));
-        calibration = new CheckBox(this);
-        calibration.setText("Calibração conferida em ofertas reais");
-        calibration.setChecked(preferences.calibrationConfirmed());
-        root.addView(calibration);
-        autoReject = new CheckBox(this);
-        autoReject.setText("Habilitar recusa automática pelas regras fixas");
-        autoReject.setChecked(preferences.autoRejectEnabled());
-        root.addView(autoReject);
-
-        root.addView(Ui.text(this, "Áreas inseguras", 20));
+        root.addView(Ui.sectionTitle(this, "Áreas inseguras"));
         riskList = Ui.text(this, "", 14);
         root.addView(riskList);
         Button addRisk = Ui.button(this, "Marcar minha última localização como área insegura");
@@ -95,12 +85,6 @@ public final class SettingsActivity extends Activity {
         preferences.setAiModel(model.getText().toString());
         preferences.setAiApiKey(apiKey.getText().toString());
         preferences.setStrategyIntervalMinutes((int) Math.round(Ui.number(strategyHours, 3) * 60));
-        preferences.setCalibrationConfirmed(calibration.isChecked());
-        if (autoReject.isChecked() && !calibration.isChecked()) {
-            preferences.setAutoRejectEnabled(false);
-            autoReject.setChecked(false);
-            Toast.makeText(this, "Confirme a calibração antes de ativar a recusa.", Toast.LENGTH_LONG).show();
-        } else preferences.setAutoRejectEnabled(autoReject.isChecked());
         Toast.makeText(this, "Configurações salvas.", Toast.LENGTH_SHORT).show();
     }
 

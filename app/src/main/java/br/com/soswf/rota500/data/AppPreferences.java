@@ -29,21 +29,6 @@ public final class AppPreferences {
 
     public int longRideMinutes() { return preferences.getInt("long_minutes", 35); }
 
-    public boolean autoRejectEnabled() { return preferences.getBoolean("auto_reject", false); }
-    public void setAutoRejectEnabled(boolean value) { preferences.edit().putBoolean("auto_reject", value).apply(); }
-
-    public boolean calibrationConfirmed() { return preferences.getBoolean("calibration_confirmed", false); }
-    public void setCalibrationConfirmed(boolean value) {
-        SharedPreferences.Editor editor = preferences.edit().putBoolean("calibration_confirmed", value);
-        if (!value) editor.putBoolean("auto_reject", false);
-        editor.apply();
-    }
-
-    public int rejectDelayMillis() { return preferences.getInt("reject_delay_ms", 1800); }
-    public void setRejectDelayMillis(int value) {
-        preferences.edit().putInt("reject_delay_ms", Math.max(1000, Math.min(5000, value))).apply();
-    }
-
     public double operatingCostPerKm() { return readDouble("operating_cost_km", 1.50); }
     public void setOperatingCostPerKm(double value) { writeDouble("operating_cost_km", value); }
 
@@ -73,6 +58,22 @@ public final class AppPreferences {
     public boolean dynamicCapturePending() { return preferences.getBoolean("dynamic_capture_pending", false); }
     public void requestDynamicCapture() { preferences.edit().putBoolean("dynamic_capture_pending", true).apply(); }
     public void clearDynamicCaptureRequest() { preferences.edit().putBoolean("dynamic_capture_pending", false).apply(); }
+
+    public boolean captureActive() { return preferences.getBoolean("capture_active", false); }
+    public void setCaptureActive(boolean value) { preferences.edit().putBoolean("capture_active", value).apply(); }
+
+    public void setLastDecision(String title, String details, String tone) {
+        preferences.edit()
+                .putString("last_decision_title", title)
+                .putString("last_decision_details", details)
+                .putString("last_decision_tone", tone)
+                .putLong("last_decision_at", System.currentTimeMillis())
+                .apply();
+    }
+    public String lastDecisionTitle() { return preferences.getString("last_decision_title", "Aguardando oferta"); }
+    public String lastDecisionDetails() { return preferences.getString("last_decision_details", "Abra a Uber ou a 99 com a leitura ligada."); }
+    public String lastDecisionTone() { return preferences.getString("last_decision_tone", "NEUTRAL"); }
+    public long lastDecisionAt() { return preferences.getLong("last_decision_at", 0); }
 
     public boolean canAskForContext() {
         return System.currentTimeMillis() - preferences.getLong("last_context_prompt", 0) >= 3_600_000L;

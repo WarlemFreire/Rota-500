@@ -2,7 +2,7 @@
 
 Projeto Android nativo, em Java, para apoiar um motorista de Uber e 99. A meta inicial é R$ 500 brutos por dia. O app observa ofertas durante uma jornada iniciada pelo motorista, mostra uma avaliação na tela, guarda localização e resultados, calcula orçamentos particulares e aprende padrões de faturamento a partir dos totais informados.
 
-O projeto foi compilado no GitHub Actions em 25/09/2026. Os testes do núcleo, a validação de sintaxe e a montagem do APK Android foram concluídos. A calibração em um aparelho real ainda precisa ocorrer.
+Na versão 0.2, a leitura de ofertas usa captura de tela autorizada pelo Android e OCR local. A permissão de Acessibilidade foi retirada para evitar o bloqueio de instalação encontrado no Android 16. A calibração em um aparelho real ainda precisa ocorrer.
 
 O arquivo `CLOUD_BUILD.md` explica a compilação no GitHub Actions pelo celular. O fluxo de trabalho está em `.github/workflows/build-apk.yml`. Use apenas um repositório privado.
 
@@ -20,16 +20,17 @@ Requer Android 11 ou superior (`minSdk 30`). O aplicativo foi configurado para A
 ## Primeira utilização
 
 1. Abra **Regras e configurações**. Confira meta, custo total por quilômetro, régua de R$/km, jornada e áreas de risco.
-2. Ative a leitura de tela em **Acessibilidade**, pelo menu do Android. Inicie a jornada no Rota 500 e permita localização. Uma notificação permanente informa que a coleta está ativa.
-3. Faça a calibração com ofertas reais de Uber e 99. Confirme se valor, tempo, quilometragem, endereço, botão de recusa e sobreposição correspondem à tela. Deixe **recusa automática desativada** até isso funcionar em diferentes telas e situações.
-4. Atualize o **bruto acumulado da jornada atual** periodicamente, somando Uber, 99 e corridas particulares. O painel soma as jornadas iniciadas no mesmo dia. O app ainda não lê o faturamento realizado diretamente dos extratos das plataformas.
-5. Faça um backup dos dados em uma pasta escolhida pelo seletor do Android. Se o provedor Google Drive do aparelho permitir seleção de pasta e gravação, ela pode ser usada. Restauração pelo arquivo JSON é feita no painel, depois de encerrar a jornada.
+2. Toque em **Iniciar jornada**, permita localização e autorize o compartilhamento da tela inteira. A imagem não é gravada: os quadros são processados na memória e descartados.
+3. Para enxergar **ACEITAR**, **RECUSAR** ou **CONFERIR** sobre a tela da Uber e da 99, toque em **Mostrar decisão sobre Uber e 99** e libere a sobreposição. Sem essa autorização, a recomendação aparece como notificação.
+4. Faça a calibração com ofertas reais. Confira valor, tempo, quilometragem e destino lidos pelo aplicativo. O aceite e a recusa são manuais.
+5. Atualize o **bruto acumulado da jornada atual** periodicamente, somando Uber, 99 e corridas particulares. O painel soma as jornadas iniciadas no mesmo dia. O app ainda não lê o faturamento realizado diretamente dos extratos das plataformas.
+6. Faça um backup dos dados em uma pasta escolhida pelo seletor do Android. Se o provedor Google Drive do aparelho permitir seleção de pasta e gravação, ela pode ser usada. Restauração pelo arquivo JSON é feita no painel, depois de encerrar a jornada.
 
 ## O que funciona no código
 
-- Ofertas: captura de texto por acessibilidade, cálculo com deslocamento até embarque + corrida, análise por R$/km e, em viagens longas, R$/h. Leitura incompleta ou com preços conflitantes pede revisão.
+- Ofertas: captura contínua de quadros em memória, OCR latino local e análise a cada 350 ms, sempre descartando quadros antigos. Calcula deslocamento até embarque + corrida, R$/km e, em viagens longas, R$/h. Leitura incompleta ou com preços conflitantes pede conferência.
 - Segurança: nomes cadastrados de áreas proibidas; novas áreas podem ser marcadas com nome, coordenada atual e raio. A avaliação de uma rota inteira ainda não existe. A mensagem na oferta deixa isso explícito.
-- Aceite sempre manual. A recusa automática é opcional, desligada por padrão e exige confirmação de calibração; revalida a tela antes do clique. O atraso é técnico e configurável, não uma promessa de compatibilidade com as plataformas.
+- Aceite e recusa manuais. A versão de instalação fácil não usa Acessibilidade e não toca nos botões da Uber ou da 99.
 - Jornada: recomenda encerrar quando a meta é alcançada ou após 12 horas. O acompanhamento é encerrado após até 18 horas, com checagem periódica. A localização fica ativa somente durante a jornada iniciada pelo motorista.
 - Estratégia: motor local com regras e estimativas por medianas, faixa de 3 horas e grade geográfica aproximada. Aprende com variações de faturamento total informadas ao longo do tempo. A IA externa opcional usa um endpoint HTTPS compatível com chat completions, modelo e chave escolhidos pelo usuário. Não há fornecedor ou modelo pré-selecionado. Se falhar, a estratégia local continua.
 - Custos: o custo operacional configurado impede recomendar corridas abaixo do próprio custo por km. O padrão de R$ 1,50/km é uma estimativa inicial a ser conferida no seu carro. A régua bruta de R$ 1,20/km continua configurável, mas o custo maior prevalece.
@@ -38,7 +39,8 @@ Requer Android 11 ou superior (`minSdk 30`). O aplicativo foi configurado para A
 
 ## Limites antes do teste físico
 
-- As telas de Uber e 99 mudam. O parser e os nomes dos pacotes precisam ser calibrados no aparelho; a recusa automática ainda não foi validada em serviço real.
+- As telas de Uber e 99 mudam. O OCR e o parser precisam ser calibrados no aparelho. A meta é exibir a decisão em menos de um segundo, mas o tempo real depende do telefone e deve ser medido em ofertas reais.
+- Alguns aplicativos podem impedir a captura de sua própria tela. É necessário confirmar fisicamente se as versões instaladas da Uber e da 99 permitem a leitura.
 - O mapa dinâmico usa uma contagem experimental de cores da imagem. Cores de controles, trânsito e fundo podem confundir a leitura. A imagem é processada na memória e descartada; o resultado não deve sustentar sozinho uma mudança de área.
 - O clima é pedido manualmente quando o app detecta o carro parado. Não há fonte automática de clima.
 - A detecção de área insegura por nome e círculo local não identifica todos os trajetos, vias alternativas ou pontos de embarque. Ela não substitui sua avaliação do mapa e da segurança real.

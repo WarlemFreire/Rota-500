@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="navy">#102235</color>
-    <color name="green">#1E8E5A</color>
-    <color name="amber">#F4A623</color>
-    <color name="red">#C43D3D</color>
-    <color name="surface">#F5F7F8</color>
+    <color name="navy">#0B1F2A</color>
+    <color name="green">#087A52</color>
+    <color name="amber">#B96A00</color>
+    <color name="red">#B3261E</color>
+    <color name="surface">#F3F6F5</color>
     <color name="white">#FFFFFF</color>
 </resources>

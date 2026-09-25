@@ -33,6 +33,7 @@ public final class QuoteActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Ui.SURFACE);
         int p = (int) (18 * getResources().getDisplayMetrics().density);
         root.setPadding(p, p, p, p);
         scroll.addView(root);
@@ -50,7 +51,7 @@ public final class QuoteActivity extends Activity {
         payment = Ui.field(this, root, "Pagamento", "A combinar", false);
         notes = Ui.field(this, root, "Observações", "", false);
 
-        root.addView(Ui.text(this, "Estimativa operacional", 19));
+        root.addView(Ui.sectionTitle(this, "Estimativa operacional"));
         pickupKm = Ui.field(this, root, "Km até buscar", "0", true);
         passengerKm = Ui.field(this, root, "Km com passageiro", "0", true);
         returnKm = Ui.field(this, root, "Km de retorno vazio", "0", true);
