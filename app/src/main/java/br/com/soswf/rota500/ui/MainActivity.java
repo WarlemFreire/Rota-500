@@ -15,11 +15,12 @@ import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -37,6 +38,7 @@ import br.com.soswf.rota500.core.StrategyAdvice;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
 import br.com.soswf.rota500.data.DashboardStats;
+import br.com.soswf.rota500.data.FinancialToday;
 import br.com.soswf.rota500.location.TrackingService;
 
 public final class MainActivity extends Activity {
@@ -53,8 +55,10 @@ public final class MainActivity extends Activity {
     private TextView goalDetails;
     private TextView paceDetails;
     private TextView hourValue;
+    private TextView blockValue;
     private TextView activeTimeValue;
-    private TextView offersValue;
+    private TextView financialValue;
+    private TextView sourceDetails;
     private ProgressBar goalProgress;
     private LinearLayout decisionCard;
     private TextView decisionTitle;
@@ -63,6 +67,17 @@ public final class MainActivity extends Activity {
     private Button shiftButton;
     private Button captureButton;
     private Button overlayButton;
+    private Button pauseButton;
+    private Button undoButton;
+    private long lastMoneyEventId;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideUndo = () -> { if (undoButton != null) undoButton.setVisibility(View.GONE); };
+    private final Runnable refreshClock = new Runnable() {
+        @Override public void run() {
+            refreshMetricsOnly();
+            uiHandler.postDelayed(this, 60_000L);
+        }
+    };
     private boolean pendingStart;
     private boolean pendingCaptureAfterNotification;
     private boolean receiverRegistered;
@@ -89,6 +104,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onStop() {
+        uiHandler.removeCallbacks(refreshClock);
         if (receiverRegistered) {
             unregisterReceiver(updates);
             receiverRegistered = false;
@@ -100,6 +116,13 @@ public final class MainActivity extends Activity {
         super.onResume();
         refresh();
         maybeAskForContext();
+        uiHandler.removeCallbacks(refreshClock);
+        uiHandler.postDelayed(refreshClock, 60_000L);
+    }
+
+    @Override protected void onDestroy() {
+        uiHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 
     private void buildUi() {
@@ -144,15 +167,28 @@ public final class MainActivity extends Activity {
         grossValue.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         grossValue.setGravity(android.view.Gravity.CENTER);
         grossValue.setPadding(0, 0, 0, Ui.dp(this, 12));
-        grossValue.setOnClickListener(v -> showGrossDialog());
+        grossValue.setOnClickListener(v -> showSourceSheet());
         root.addView(grossValue);
 
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
-        hourValue = addMetric(metrics, "R$/HORA", "R$ 0", Ui.AMBER);
-        activeTimeValue = addMetric(metrics, "JORNADA", "0:00", Ui.BLUE);
-        offersValue = addMetric(metrics, "BOAS/OFERTAS", "0/0", Ui.GREEN);
+        blockValue = addMetric(metrics, "R$/H 2H", "—", Ui.AMBER);
+        hourValue = addMetric(metrics, "R$/H DIA", "—", Ui.GREEN);
+        activeTimeValue = addMetric(metrics, "ATIVO", "0:00", Ui.BLUE);
         root.addView(metrics);
+
+        LinearLayout financeCard = Ui.card(this);
+        TextView financeLabel = Ui.text(this, "RESULTADO APÓS GASTOS LANÇADOS", 12);
+        financeLabel.setTextColor(Ui.MUTED);
+        financeLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        financeCard.addView(financeLabel);
+        financialValue = Ui.text(this, "R$ 0", 27);
+        financialValue.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        financeCard.addView(financialValue);
+        sourceDetails = Ui.text(this, "", 13);
+        sourceDetails.setTextColor(Ui.MUTED);
+        financeCard.addView(sourceDetails);
+        root.addView(financeCard);
 
         LinearLayout goalCard = Ui.card(this);
         TextView progressLabel = Ui.text(this, "META DO DIA", 12);
@@ -188,11 +224,33 @@ public final class MainActivity extends Activity {
         decisionCard.addView(decisionDetails);
         root.addView(decisionCard);
 
+        root.addView(Ui.sectionTitle(this, "REGISTRAR GANHO"));
+        LinearLayout sources = new LinearLayout(this);
+        sources.setOrientation(LinearLayout.HORIZONTAL);
+        for (String source : new String[]{"UBER", "99", "PARTICULAR"}) {
+            Button button = Ui.secondaryButton(this, source);
+            button.setOnClickListener(v -> enterMoney(source));
+            sources.addView(button, new LinearLayout.LayoutParams(0, Ui.dp(this, 68), 1));
+        }
+        root.addView(sources);
+        undoButton = Ui.secondaryButton(this, "DESFAZER LANÇAMENTO");
+        undoButton.setVisibility(View.GONE);
+        undoButton.setOnClickListener(v -> {
+            database.undoMoney(lastMoneyEventId);
+            undoButton.setVisibility(View.GONE);
+            refresh();
+        });
+        root.addView(undoButton);
+
         shiftButton = Ui.primaryButton(this, "INICIAR JORNADA");
         shiftButton.setOnClickListener(v -> toggleShift());
         captureButton = Ui.secondaryButton(this, "Ligar leitura da tela");
         captureButton.setOnClickListener(v -> toggleCapture());
         root.addView(actionRow(shiftButton, captureButton));
+
+        pauseButton = Ui.secondaryButton(this, "PAUSAR JORNADA");
+        pauseButton.setOnClickListener(v -> togglePause());
+        root.addView(pauseButton);
 
         overlayButton = Ui.secondaryButton(this, "Mostrar decisão sobre Uber e 99");
         overlayButton.setOnClickListener(v -> requestOverlayPermission());
@@ -208,8 +266,8 @@ public final class MainActivity extends Activity {
         root.addView(strategyCard);
 
         root.addView(Ui.sectionTitle(this, "CONTROLES RÁPIDOS"));
-        Button gross = Ui.secondaryButton(this, "Atualizar ganho");
-        gross.setOnClickListener(v -> showGrossDialog());
+        Button gross = Ui.secondaryButton(this, "Gastos e odômetro");
+        gross.setOnClickListener(v -> startActivity(new Intent(this, FinanceActivity.class)));
         Button dynamic = Ui.secondaryButton(this, "Analisar o mapa dinâmico");
         dynamic.setOnClickListener(v -> requestDynamicMap());
         root.addView(actionRow(gross, dynamic));
@@ -283,6 +341,8 @@ public final class MainActivity extends Activity {
         nav.setPadding(Ui.dp(this, 8), Ui.dp(this, 7), Ui.dp(this, 8), Ui.dp(this, 8));
         nav.setBackground(Ui.rounded(Ui.CARD, 0, Ui.BORDER, this));
         nav.addView(navItem("●\nAGORA", Ui.GREEN, v -> scroll.smoothScrollTo(0, 0)));
+        nav.addView(navItem("▣\nGASTOS", Ui.MUTED,
+                v -> startActivity(new Intent(this, FinanceActivity.class))));
         nav.addView(navItem("◇\nPARTICULAR", Ui.MUTED,
                 v -> startActivity(new Intent(this, QuoteActivity.class))));
         nav.addView(navItem("≡\nCORRIDAS", Ui.MUTED,
@@ -299,7 +359,7 @@ public final class MainActivity extends Activity {
         item.setGravity(android.view.Gravity.CENTER);
         item.setOnClickListener(listener);
         item.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
-        item.setLayoutParams(new LinearLayout.LayoutParams(0, Ui.dp(this, 58), 1));
+        item.setLayoutParams(new LinearLayout.LayoutParams(0, Ui.dp(this, 66), 1));
         return item;
     }
 
@@ -336,6 +396,17 @@ public final class MainActivity extends Activity {
         startService(new Intent(this, ScreenCaptureService.class).setAction(ScreenCaptureService.ACTION_STOP));
         preferences.setCaptureActive(false);
         refresh();
+        if (!preferences.backupTreeUri().isBlank()) {
+            new Thread(() -> {
+                try {
+                    new BackupManager(this).writeDataBackup(Uri.parse(preferences.backupTreeUri()));
+                    preferences.setLastBackupAt(System.currentTimeMillis());
+                    runOnUiThread(() -> toast("Jornada encerrada. Backup salvo."));
+                } catch (Exception error) {
+                    runOnUiThread(() -> toast("Jornada encerrada. Backup pendente: toque em Salvar backup."));
+                }
+            }, "rota500-shift-backup").start();
+        }
     }
 
     private void toggleCapture() {
@@ -387,31 +458,75 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void showGrossDialog() {
+    private void showSourceSheet() {
         if (database.activeSessionId() <= 0) {
             toast("Inicie a jornada primeiro.");
             return;
         }
-        EditText input = new EditText(this);
-        input.setTextSize(22);
-        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        input.setText(String.format(Locale.forLanguageTag("pt-BR"), "%.2f",
-                database.dashboardStats().activeGrossCents / 100.0));
-        int padding = Ui.dp(this, 20);
-        input.setPadding(padding, padding, padding, padding);
-        new AlertDialog.Builder(this)
-                .setTitle("Quanto já entrou hoje?")
-                .setMessage("Some Uber, 99 e corridas particulares desta jornada.")
-                .setView(input)
-                .setPositiveButton("Salvar", (dialog, which) -> {
-                    double value = Ui.number(input, -1);
-                    if (value >= 0) {
-                        database.setActiveGrossCents(Math.round(value * 100));
-                        refresh();
-                    }
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
+        LinearLayout choices = new LinearLayout(this);
+        choices.setOrientation(LinearLayout.VERTICAL);
+        android.app.Dialog dialog = new android.app.Dialog(this);
+        choices.setPadding(Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18));
+        choices.setBackground(Ui.rounded(Ui.CARD, 18, Ui.BORDER, this));
+        choices.addView(Ui.text(this, "Qual ganho você quer registrar?", 20));
+        for (String source : new String[]{"UBER", "99", "PARTICULAR"}) {
+            Button button = Ui.secondaryButton(this, source);
+            choices.addView(button);
+            button.setOnClickListener(v -> { dialog.dismiss(); enterMoney(source); });
+        }
+        dialog.setContentView(choices);
+        dialog.show();
+    }
+
+    private void enterMoney(String source) {
+        if (database.activeSessionId() <= 0) { toast("Inicie a jornada primeiro."); return; }
+        String prompt = "PARTICULAR".equals(source) ? "Valor desta corrida particular"
+                : "Total acumulado da " + source + " hoje";
+        NumberPad.show(this, prompt, 2, "", cents -> {
+            if (cents <= 0 && "PARTICULAR".equals(source)) return;
+            try {
+                lastMoneyEventId = "PARTICULAR".equals(source)
+                        ? database.recordExtra(source, cents)
+                        : database.recordPlatformTotal(source, cents);
+                undoButton.setVisibility(View.VISIBLE);
+                uiHandler.removeCallbacks(hideUndo);
+                uiHandler.postDelayed(hideUndo, 8_000L);
+                refresh();
+            } catch (RuntimeException error) { toast("Não foi possível registrar o valor."); }
+        });
+    }
+
+    private void togglePause() {
+        if (database.openPauseId() > 0) {
+            database.closePause();
+            refresh();
+            return;
+        }
+        if (database.activeSessionId() <= 0) return;
+        String[] reasons = {"Almoço", "Abastecer", "Descanso", "Cochilo",
+                "Banheiro", "Pessoal", "Espera estratégica", "Outro"};
+        android.app.Dialog dialog = new android.app.Dialog(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14));
+        content.setBackground(Ui.rounded(Ui.CARD, 18, Ui.BORDER, this));
+        content.addView(Ui.text(this, "Motivo da pausa", 20));
+        for (int i = 0; i < reasons.length; i += 2) {
+            LinearLayout row = new LinearLayout(this);
+            for (int j = i; j < i + 2; j++) {
+                String reason = reasons[j];
+                Button button = Ui.secondaryButton(this, reason);
+                row.addView(button, new LinearLayout.LayoutParams(0, Ui.dp(this, 64), 1));
+                button.setOnClickListener(v -> {
+                    database.openPause(reason);
+                    dialog.dismiss();
+                    refresh();
+                });
+            }
+            content.addView(row);
+        }
+        dialog.setContentView(content);
+        dialog.show();
     }
 
     private void requestStrategy() {
@@ -464,7 +579,7 @@ public final class MainActivity extends Activity {
         DashboardStats stats = database.dashboardStats();
         boolean active = stats.hasActiveSession();
         boolean reading = active && preferences.captureActive();
-        statusPill.setText(active ? "EM JORNADA" : "PARADO");
+        statusPill.setText(active ? database.openPauseId() > 0 ? "PAUSADO" : "EM JORNADA" : "PARADO");
         statusPill.setBackground(Ui.rounded(active ? Ui.GREEN : Ui.CARD_ALT, 100,
                 active ? 0 : Ui.BORDER, this));
         statusPill.setTextColor(active ? Ui.SURFACE : Ui.MUTED);
@@ -477,6 +592,9 @@ public final class MainActivity extends Activity {
         captureButton.setVisibility(active ? View.VISIBLE : View.GONE);
         captureButton.setText(reading ? "Parar leitura" : "Ligar leitura");
         captureButton.setTextColor(reading ? Ui.GREEN : Ui.NAVY);
+        pauseButton.setVisibility(active ? View.VISIBLE : View.GONE);
+        pauseButton.setText(database.openPauseId() > 0 ? "RETOMAR JORNADA" : "PAUSAR JORNADA");
+        pauseButton.setTextColor(database.openPauseId() > 0 ? Ui.AMBER : Ui.NAVY);
         overlayButton.setVisibility(active && !Settings.canDrawOverlays(this) ? View.VISIBLE : View.GONE);
         refreshMetricsOnly();
         refreshDecision();
@@ -489,8 +607,9 @@ public final class MainActivity extends Activity {
 
     private void refreshMetricsOnly() {
         DashboardStats stats = database.dashboardStats();
-        int worked = stats.workedMinutes(System.currentTimeMillis());
-        double gross = stats.grossCents / 100.0;
+        FinancialToday day = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
+        long activeMinutes = day.activeMinutes();
+        double gross = day.balance().totalCents() / 100.0;
         double goal = preferences.dailyGoal();
         double remaining = Math.max(0, goal - gross);
         grossValue.setText(money(gross));
@@ -498,20 +617,30 @@ public final class MainActivity extends Activity {
                 ? "Faltam " + money(remaining) + " para a meta de " + money(goal)
                 : "Meta de " + money(goal) + " alcançada");
         goalProgress.setProgress(goal <= 0 ? 0 : (int) Math.min(1000, Math.round(gross / goal * 1000)));
-        hourValue.setText(stats.robustGrossPerHour > 0
-                ? String.format(Locale.forLanguageTag("pt-BR"), "R$ %.0f", stats.robustGrossPerHour)
-                : "—");
-        activeTimeValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d:%02d", worked / 60, worked % 60));
-        offersValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d/%d",
-                stats.viableOffersLastHour, stats.offersLastHour));
+        blockValue.setText(day.blockGrossPerHourCents() == null ? "—" : moneyRounded(day.blockGrossPerHourCents()));
+        hourValue.setText(day.dayGrossPerHourCents() == null ? "—" : moneyRounded(day.dayGrossPerHourCents()));
+        activeTimeValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d:%02d", activeMinutes / 60, activeMinutes % 60));
+        financialValue.setText(money(day.cashRemainderCents() / 100.0));
+        sourceDetails.setText("Uber " + money(day.balance().platformCents("UBER") / 100.0)
+                + "  •  99 " + money(day.balance().platformCents("99") / 100.0)
+                + "\nParticular " + money(day.balance().extraCents() / 100.0)
+                + (day.balance().legacyCents() > 0 ? "  •  anterior " + money(day.balance().legacyCents() / 100.0) : "")
+                + "\nGastos pagos hoje " + money(day.cashSpentCents() / 100.0)
+                + "  •  R$/km jornada " + (day.odometerKm() == null || day.odometerKm() < 0.1 ? "—" : money(
+                    day.balance().totalCents() / 100.0 / day.odometerKm())));
         if (stats.hasActiveSession()) {
-            paceDetails.setText(String.format(Locale.forLanguageTag("pt-BR"),
-                    "%.0f%% da meta  •  %d ofertas dentro da régua na última hora",
-                    goal <= 0 ? 0 : Math.min(100, gross / goal * 100), stats.viableOffersLastHour));
+            if (database.openPauseId() > 0) paceDetails.setText("Jornada pausada. Tempo ativo congelado.");
+            else if (day.blockGrossPerHourCents() != null && day.dayGrossPerHourCents() != null
+                    && day.blockGrossPerHourCents() < day.dayGrossPerHourCents() * 0.8) {
+                paceDetails.setText("Ritmo das últimas 2 h abaixo do dia. Reavalie a região.");
+            } else paceDetails.setText("Bloco: últimas 2 h  •  Dia: tempo ativo sem pausas");
         } else {
-            activeTimeValue.setText("0:00");
-            paceDetails.setText("Toque no valor acima para atualizar o ganho");
+            paceDetails.setText("Toque em Uber, 99 ou Particular para registrar ganhos.");
         }
+    }
+
+    private String moneyRounded(long cents) {
+        return String.format(Locale.forLanguageTag("pt-BR"), "R$ %.0f", cents / 100.0);
     }
 
     private void refreshDecision() {
@@ -608,6 +737,7 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 new BackupManager(this).writeDataBackup(tree);
+                preferences.setLastBackupAt(System.currentTimeMillis());
                 runOnUiThread(() -> toast("Backup concluído."));
             } catch (Exception error) {
                 runOnUiThread(() -> toast("Não foi possível salvar nessa pasta."));

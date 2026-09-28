@@ -13,6 +13,7 @@ import br.com.soswf.rota500.core.StrategyGuard;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
 import br.com.soswf.rota500.data.DashboardStats;
+import br.com.soswf.rota500.data.FinancialToday;
 
 public final class StrategyCoordinator {
     public interface Callback { void onAdvice(StrategyAdvice advice, String source, String warning); }
@@ -29,11 +30,15 @@ public final class StrategyCoordinator {
 
     public StrategySnapshot snapshot() {
         DashboardStats stats = database.dashboardStats();
+        FinancialToday day = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
+        Long measuredRate = day.blockGrossPerHourCents() != null
+                ? day.blockGrossPerHourCents() : day.dayGrossPerHourCents();
         return new StrategySnapshot(
                 preferences.dailyGoal(), stats.grossCents / 100.0,
                 stats.workedMinutes(System.currentTimeMillis()), Math.min(720, preferences.plannedMinutes()),
                 stats.idleMinutes, stats.offersLastHour, stats.viableOffersLastHour,
-                stats.robustGrossPerHour, stats.learnedGrossPerHour, stats.emptyKm,
+                measuredRate == null ? 0 : measuredRate / 100.0,
+                stats.learnedGrossPerHour, stats.emptyKm,
                 stats.currentZone, preferences.weather(), database.latestDynamicLevel(), stats.unsafeZone);
     }
 

@@ -65,7 +65,7 @@ final class DecisionAlert {
         LinearLayout metrics = new LinearLayout(context);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
         metrics.setGravity(Gravity.CENTER);
-        metrics.addView(metric("KM", decision.kmValue, decision.kmLight));
+        metrics.addView(metric("KM OFERTA", decision.kmValue, decision.kmLight));
         metrics.addView(metric("HORA", decision.hourValue, decision.hourLight));
         metrics.addView(metric("NOTA", decision.ratingValue, decision.ratingLight));
         panel.addView(metrics);

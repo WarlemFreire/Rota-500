@@ -108,7 +108,7 @@ final class Ui {
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setAllCaps(false);
         button.setGravity(Gravity.CENTER);
-        button.setMinHeight(dp(context, 54));
+        button.setMinHeight(dp(context, 64));
         button.setPadding(dp(context, 14), dp(context, 10), dp(context, 14), dp(context, 10));
         button.setBackground(rounded(background, 14, background == CARD_ALT ? BORDER : 0, context));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(

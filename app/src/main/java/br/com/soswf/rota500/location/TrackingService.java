@@ -17,6 +17,7 @@ import android.os.IBinder;
 import android.os.Looper;
 
 import br.com.soswf.rota500.ai.StrategyCoordinator;
+import br.com.soswf.rota500.backup.BackupManager;
 import br.com.soswf.rota500.core.StrategyAdvice;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
@@ -40,7 +41,13 @@ public final class TrackingService extends Service implements LocationListener {
                 DashboardStats stats = database.dashboardStats();
                 if (stats.workedMinutes(System.currentTimeMillis()) >= 1080) {
                     database.endActiveSession(stats.currentZone);
+                    backupAfterShift();
                     stopTracking();
+                    return;
+                }
+                if (database.openPauseId() > 0) {
+                    updateNotification("Jornada pausada");
+                    handler.postDelayed(this, CHECK_INTERVAL);
                     return;
                 }
                 StrategyCoordinator coordinator = new StrategyCoordinator(TrackingService.this);
@@ -94,6 +101,17 @@ public final class TrackingService extends Service implements LocationListener {
         if (locationManager != null) locationManager.removeUpdates(this);
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
+    }
+
+    private void backupAfterShift() {
+        String folder = new AppPreferences(this).backupTreeUri();
+        if (folder.isBlank()) return;
+        new Thread(() -> {
+            try {
+                new BackupManager(this).writeDataBackup(android.net.Uri.parse(folder));
+                new AppPreferences(this).setLastBackupAt(System.currentTimeMillis());
+            } catch (Exception ignored) { }
+        }, "rota500-auto-backup").start();
     }
 
     @Override public void onLocationChanged(Location location) {

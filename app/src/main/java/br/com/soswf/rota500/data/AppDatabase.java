@@ -20,13 +20,16 @@ import br.com.soswf.rota500.core.QuoteResult;
 import br.com.soswf.rota500.core.RobustStats;
 import br.com.soswf.rota500.core.RuleDecision;
 import br.com.soswf.rota500.core.StrategyAdvice;
+import br.com.soswf.rota500.core.MoneyLedger;
+import br.com.soswf.rota500.core.WorkMath;
 
 public final class AppDatabase extends SQLiteOpenHelper {
     private static final String NAME = "rota500.db";
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
     private static final String[] BACKUP_TABLES = {"work_sessions", "offers", "location_points",
             "gross_snapshots", "private_quotes", "risk_zones", "strategy_events",
-            "dynamic_observations", "learning_buckets"};
+            "dynamic_observations", "learning_buckets", "money_events", "expenses", "work_pauses", "odometer_entries"};
+    private static final int LEGACY_BACKUP_TABLES = 9;
     private static volatile AppDatabase instance;
 
     public static AppDatabase get(Context context) {
@@ -50,6 +53,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE dynamic_observations (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, created_at INTEGER NOT NULL, level TEXT, warm_ratio REAL, source TEXT)");
         db.execSQL("CREATE TABLE learning_buckets (bucket_key TEXT PRIMARY KEY, samples INTEGER NOT NULL, expected_gross_hour REAL NOT NULL, updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE gross_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, captured_at INTEGER NOT NULL, gross_cents INTEGER NOT NULL)");
+        createFinanceTables(db);
         for (String name : new String[]{"Buraco do Boi", "Bacia", "Caixa d'Água", "Forte", "Geneciano"}) {
             ContentValues values = new ContentValues();
             values.put("name", name);
@@ -60,6 +64,35 @@ public final class AppDatabase extends SQLiteOpenHelper {
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) db.execSQL("CREATE TABLE IF NOT EXISTS gross_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, captured_at INTEGER NOT NULL, gross_cents INTEGER NOT NULL)");
         if (oldVersion < 3) db.execSQL("ALTER TABLE offers ADD COLUMN passenger_rating REAL");
+        if (oldVersion < 4) {
+            createFinanceTables(db);
+            migrateOldGross(db);
+        }
+    }
+
+    private void createFinanceTables(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE money_events (id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at INTEGER NOT NULL, day_key INTEGER NOT NULL, session_id INTEGER, kind TEXT NOT NULL, source TEXT NOT NULL, amount_cents INTEGER NOT NULL, baseline_cents INTEGER NOT NULL DEFAULT 0, voided INTEGER NOT NULL DEFAULT 0)");
+        db.execSQL("CREATE INDEX money_events_day ON money_events(day_key,occurred_at,id)");
+        db.execSQL("CREATE TABLE expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at INTEGER NOT NULL, day_key INTEGER NOT NULL, session_id INTEGER, category TEXT NOT NULL, amount_cents INTEGER NOT NULL, fuel_type TEXT, quantity REAL, odometer_km REAL, voided INTEGER NOT NULL DEFAULT 0)");
+        db.execSQL("CREATE INDEX expenses_day ON expenses(day_key)");
+        db.execSQL("CREATE TABLE work_pauses (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER, reason TEXT NOT NULL)");
+        db.execSQL("CREATE TABLE odometer_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, occurred_at INTEGER NOT NULL, day_key INTEGER NOT NULL, km REAL NOT NULL)");
+    }
+
+    private void migrateOldGross(SQLiteDatabase db) {
+        try (Cursor cursor = db.rawQuery("SELECT id,start_at,end_at,gross_cents FROM work_sessions WHERE gross_cents>0", null)) {
+            while (cursor.moveToNext()) {
+                long started = cursor.getLong(1);
+                ContentValues entry = new ContentValues();
+                entry.put("occurred_at", cursor.isNull(2) ? System.currentTimeMillis() : cursor.getLong(2));
+                entry.put("day_key", dayKey(started));
+                entry.put("session_id", cursor.getLong(0));
+                entry.put("kind", "LEGACY");
+                entry.put("source", "ANTERIOR");
+                entry.put("amount_cents", cursor.getLong(3));
+                db.insertOrThrow("money_events", null, entry);
+            }
+        }
     }
 
     public synchronized long beginSession(String startZone) {
@@ -76,13 +109,23 @@ public final class AppDatabase extends SQLiteOpenHelper {
     public synchronized void endActiveSession(String endZone) {
         DashboardStats stats = dashboardStats();
         if (!stats.hasActiveSession()) return;
+        closePause();
         long now = System.currentTimeMillis();
         ContentValues values = new ContentValues();
         values.put("end_at", now);
         values.put("end_zone", endZone);
         getWritableDatabase().update("work_sessions", values, "id=?", new String[]{Long.toString(stats.sessionId)});
-        int minutes = (int) Math.max(0, (now - stats.startedAt) / 60_000L);
-        if (minutes >= 30) {
+        long active = activeMillis(stats.startedAt, now, now);
+        int minutes = (int) (active / 60_000L);
+        int sources = scalarInt("SELECT COUNT(DISTINCT source) FROM money_events "
+                        + "WHERE session_id=? AND kind='PLATFORM' AND voided=0",
+                new String[]{Long.toString(stats.sessionId)});
+        long recentPlatform = scalarLong("SELECT COALESCE(MIN(latest),0) FROM "
+                        + "(SELECT MAX(occurred_at) AS latest FROM money_events "
+                        + "WHERE session_id=? AND kind='PLATFORM' AND voided=0 GROUP BY source)",
+                new String[]{Long.toString(stats.sessionId)});
+        if (minutes >= 60 && stats.activeGrossCents > 0 && sources >= 2
+                && recentPlatform >= now - 30 * 60_000L) {
             double grossHour = stats.activeGrossCents / 100.0 * 60.0 / minutes;
             updateLearningBucket("GERAL", grossHour);
         }
@@ -115,6 +158,239 @@ public final class AppDatabase extends SQLiteOpenHelper {
             double rate = delta / 100.0 * 60.0 / minutes;
             updateLearningBucket(currentLearningKey(), rate);
         }
+    }
+
+    public synchronized long recordPlatformTotal(String platform, long cents) {
+        if (!"UBER".equals(platform) && !"99".equals(platform)) throw new IllegalArgumentException("Plataforma inválida");
+        if (cents < 0) throw new IllegalArgumentException("Valor inválido");
+        long session = activeSessionId();
+        if (session <= 0) throw new IllegalStateException("Inicie uma jornada");
+        long now = System.currentTimeMillis();
+        int day = dayKey(now);
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            long before = ledger(day).totalCents();
+            long baseline;
+            try (Cursor cursor = db.rawQuery("SELECT baseline_cents FROM money_events WHERE day_key=? AND source=? AND kind='PLATFORM' AND voided=0 ORDER BY id LIMIT 1",
+                    new String[]{Integer.toString(day), platform})) {
+                if (cursor.moveToFirst()) baseline = cursor.getLong(0);
+                else baseline = scalarLong("SELECT COUNT(*) FROM money_events WHERE day_key=? AND kind='LEGACY'",
+                        new String[]{Integer.toString(day)}) > 0 ? cents : 0;
+            }
+            ContentValues values = moneyValues(now, day, session, "PLATFORM", platform, cents);
+            values.put("baseline_cents", baseline);
+            long id = db.insertOrThrow("money_events", null, values);
+            applySessionDelta(session, ledger(day).totalCents() - before, now);
+            db.setTransactionSuccessful();
+            return id;
+        } finally { db.endTransaction(); }
+    }
+
+    public synchronized long recordExtra(String source, long cents) {
+        if (cents <= 0) throw new IllegalArgumentException("Valor inválido");
+        long session = activeSessionId();
+        if (session <= 0) throw new IllegalStateException("Inicie uma jornada");
+        long now = System.currentTimeMillis();
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            long id = db.insertOrThrow("money_events", null,
+                    moneyValues(now, dayKey(now), session, "EXTRA", source, cents));
+            applySessionDelta(session, cents, now);
+            db.setTransactionSuccessful();
+            return id;
+        } finally { db.endTransaction(); }
+    }
+
+    public synchronized void undoMoney(long eventId) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try (Cursor cursor = db.rawQuery("SELECT day_key,session_id FROM money_events WHERE id=? AND voided=0 AND kind!='LEGACY'",
+                new String[]{Long.toString(eventId)})) {
+            if (!cursor.moveToFirst()) return;
+            int day = cursor.getInt(0);
+            long session = cursor.getLong(1);
+            long before = ledger(day).totalCents();
+            ContentValues value = new ContentValues();
+            value.put("voided", 1);
+            db.update("money_events", value, "id=?", new String[]{Long.toString(eventId)});
+            applySessionDelta(session, ledger(day).totalCents() - before, System.currentTimeMillis());
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    public synchronized long recordExpense(String category, long cents) {
+        if (cents <= 0) throw new IllegalArgumentException("Valor inválido");
+        if (!List.of("COMBUSTIVEL", "ALIMENTACAO", "MANUTENCAO", "FINANCIAMENTO", "OUTROS")
+                .contains(category)) throw new IllegalArgumentException("Categoria inválida");
+        long now = System.currentTimeMillis();
+        ContentValues values = new ContentValues();
+        values.put("occurred_at", now);
+        values.put("day_key", dayKey(now));
+        values.put("session_id", activeSessionId());
+        values.put("category", category);
+        values.put("amount_cents", cents);
+        return getWritableDatabase().insertOrThrow("expenses", null, values);
+    }
+
+    public void undoExpense(long id) {
+        ContentValues values = new ContentValues();
+        values.put("voided", 1);
+        getWritableDatabase().update("expenses", values, "id=? AND voided=0", new String[]{Long.toString(id)});
+    }
+
+    public long openPause(String reason) {
+        long session = activeSessionId();
+        if (session <= 0 || openPauseId() > 0) return 0;
+        ContentValues values = new ContentValues();
+        values.put("session_id", session);
+        values.put("start_at", System.currentTimeMillis());
+        values.put("reason", reason);
+        return getWritableDatabase().insertOrThrow("work_pauses", null, values);
+    }
+
+    public long openPauseId() {
+        return scalarLong("SELECT COALESCE(id,0) FROM work_pauses WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null);
+    }
+
+    public void closePause() {
+        long id = openPauseId();
+        if (id <= 0) return;
+        ContentValues values = new ContentValues();
+        values.put("end_at", System.currentTimeMillis());
+        getWritableDatabase().update("work_pauses", values, "id=?", new String[]{Long.toString(id)});
+    }
+
+    public long recordOdometer(double km) {
+        if (!Double.isFinite(km) || km <= 0 || km > 9_999_999) throw new IllegalArgumentException("Odômetro inválido");
+        long session = activeSessionId();
+        if (session <= 0) throw new IllegalStateException("Inicie uma jornada");
+        long now = System.currentTimeMillis();
+        ContentValues values = new ContentValues();
+        values.put("session_id", session);
+        values.put("occurred_at", now);
+        values.put("day_key", dayKey(now));
+        values.put("km", km);
+        return getWritableDatabase().insertOrThrow("odometer_entries", null, values);
+    }
+
+    public void undoOdometer(long id) {
+        getWritableDatabase().delete("odometer_entries", "id=?", new String[]{Long.toString(id)});
+    }
+
+    public FinancialToday financialToday(double fuelRate, double wearRate) {
+        long now = System.currentTimeMillis();
+        long start = dayStart(now);
+        int day = dayKey(now);
+        List<MoneyLedger.Entry> events = moneyEntries(day);
+        MoneyLedger.Balance balance = MoneyLedger.at(events, now);
+        long fuel = 0, food = 0, maintenance = 0, financing = 0, other = 0;
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT category,amount_cents FROM expenses WHERE day_key=? AND voided=0",
+                new String[]{Integer.toString(day)})) {
+            while (cursor.moveToNext()) {
+                switch (cursor.getString(0)) {
+                    case "COMBUSTIVEL" -> fuel += cursor.getLong(1);
+                    case "ALIMENTACAO" -> food += cursor.getLong(1);
+                    case "MANUTENCAO" -> maintenance += cursor.getLong(1);
+                    case "FINANCIAMENTO" -> financing += cursor.getLong(1);
+                    default -> other += cursor.getLong(1);
+                }
+            }
+        }
+        long active = activeMillis(start, now, now);
+        long windowStart = Math.max(start, now - 7_200_000L);
+        long blockActive = activeMillis(windowStart, now, now);
+        Long dayRate = active >= 30 * 60_000L ? balance.totalCents() * 3_600_000L / active : null;
+        boolean baselineAvailable = windowStart == start || events.stream().anyMatch(e -> !e.voided() && e.at() <= windowStart);
+        boolean legacyInWindow = events.stream().anyMatch(e -> !e.voided() && "LEGACY".equals(e.kind()) && e.at() > windowStart);
+        long blockCents = balance.totalCents() - MoneyLedger.at(events, windowStart).totalCents();
+        Long blockRate = blockActive >= 30 * 60_000L && baselineAvailable && !legacyInWindow
+                && blockCents >= 0 ? blockCents * 3_600_000L / blockActive : null;
+        List<WorkMath.Odometer> points = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT occurred_at,km FROM odometer_entries WHERE day_key=? ORDER BY occurred_at,id",
+                new String[]{Integer.toString(day)})) {
+            while (cursor.moveToNext()) points.add(new WorkMath.Odometer(cursor.getLong(0), cursor.getDouble(1)));
+        }
+        Double km = WorkMath.odometerKm(points);
+        Long estimated = km != null && fuelRate > 0 && wearRate > 0 ? Math.round(balance.totalCents()
+                - (fuelRate + Math.max(0, wearRate)) * km * 100 - food - other) : null;
+        return new FinancialToday(balance, fuel + food + maintenance + financing + other,
+                fuel, food, maintenance, financing, other, active / 60_000L,
+                blockRate, dayRate, km, estimated);
+    }
+
+    private long activeMillis(long from, long until, long now) {
+        List<WorkMath.Span> sessions = new ArrayList<>();
+        List<WorkMath.Span> pauses = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT start_at,end_at FROM work_sessions WHERE start_at<? AND (end_at IS NULL OR end_at>?)",
+                new String[]{Long.toString(until), Long.toString(from)})) {
+            while (cursor.moveToNext()) sessions.add(new WorkMath.Span(cursor.getLong(0),
+                    cursor.isNull(1) ? now : cursor.getLong(1)));
+        }
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT start_at,end_at FROM work_pauses WHERE start_at<? AND (end_at IS NULL OR end_at>?)",
+                new String[]{Long.toString(until), Long.toString(from)})) {
+            while (cursor.moveToNext()) pauses.add(new WorkMath.Span(cursor.getLong(0),
+                    cursor.isNull(1) ? now : cursor.getLong(1)));
+        }
+        return WorkMath.activeMillis(from, until, sessions, pauses);
+    }
+
+    private MoneyLedger.Balance ledger(int day) {
+        return MoneyLedger.at(moneyEntries(day), Long.MAX_VALUE);
+    }
+
+    private List<MoneyLedger.Entry> moneyEntries(int day) {
+        List<MoneyLedger.Entry> entries = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT id,occurred_at,kind,source,amount_cents,baseline_cents,voided FROM money_events WHERE day_key=? ORDER BY occurred_at,id",
+                new String[]{Integer.toString(day)})) {
+            while (cursor.moveToNext()) entries.add(new MoneyLedger.Entry(cursor.getLong(0),
+                    cursor.getLong(1), cursor.getString(2), cursor.getString(3), cursor.getLong(4),
+                    cursor.getLong(5), cursor.getInt(6) != 0));
+        }
+        return entries;
+    }
+
+    private ContentValues moneyValues(long at, int day, long session, String kind, String source, long cents) {
+        ContentValues values = new ContentValues();
+        values.put("occurred_at", at);
+        values.put("day_key", day);
+        values.put("session_id", session);
+        values.put("kind", kind);
+        values.put("source", source);
+        values.put("amount_cents", cents);
+        return values;
+    }
+
+    private void applySessionDelta(long session, long delta, long now) {
+        long previous = scalarLong("SELECT gross_cents FROM work_sessions WHERE id=?",
+                new String[]{Long.toString(session)});
+        ContentValues values = new ContentValues();
+        values.put("gross_cents", Math.max(0, previous + delta));
+        getWritableDatabase().update("work_sessions", values, "id=?", new String[]{Long.toString(session)});
+        insertGrossSnapshot(session, Math.max(0, previous + delta), now);
+    }
+
+    private static long dayStart(long at) {
+        Calendar day = Calendar.getInstance();
+        day.setTimeInMillis(at);
+        day.set(Calendar.HOUR_OF_DAY, 0);
+        day.set(Calendar.MINUTE, 0);
+        day.set(Calendar.SECOND, 0);
+        day.set(Calendar.MILLISECOND, 0);
+        return day.getTimeInMillis();
+    }
+
+    private static int dayKey(long at) {
+        Calendar day = Calendar.getInstance();
+        day.setTimeInMillis(at);
+        return day.get(Calendar.YEAR) * 10_000 + (day.get(Calendar.MONTH) + 1) * 100
+                + day.get(Calendar.DAY_OF_MONTH);
     }
 
     public boolean insertOffer(OfferData offer, RuleDecision decision, boolean unsafe) {
@@ -237,8 +513,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
         midnight.set(Calendar.MILLISECOND, 0);
         long today = midnight.getTimeInMillis();
         long tomorrow = today + 24L * 3_600_000L;
-        long gross = scalarLong("SELECT COALESCE(SUM(gross_cents),0) FROM work_sessions WHERE start_at>=? AND start_at<?",
-                new String[]{Long.toString(today), Long.toString(tomorrow)});
+        long gross = ledger(dayKey(System.currentTimeMillis())).totalCents();
         int priorMinutes = scalarInt("SELECT COALESCE(SUM((end_at-start_at)/60000),0) FROM work_sessions WHERE start_at>=? AND start_at<? AND end_at IS NOT NULL",
                 new String[]{Long.toString(today), Long.toString(tomorrow)});
         long hourAgo = System.currentTimeMillis() - 3_600_000L;
@@ -345,7 +620,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
 
     public JSONObject exportData() throws Exception {
         JSONObject root = new JSONObject();
-        root.put("format", "rota500-backup-v1");
+        root.put("format", "rota500-backup-v2");
         root.put("exported_at", System.currentTimeMillis());
         for (String table : BACKUP_TABLES) {
             root.put(table, tableAsJson(table));
@@ -354,10 +629,13 @@ public final class AppDatabase extends SQLiteOpenHelper {
     }
 
     public synchronized void restoreData(JSONObject backup) throws Exception {
-        if (!"rota500-backup-v1".equals(backup.optString("format"))) {
+        boolean oldFormat = "rota500-backup-v1".equals(backup.optString("format"));
+        if (!oldFormat && !"rota500-backup-v2".equals(backup.optString("format"))) {
             throw new IllegalArgumentException("Formato do backup desconhecido");
         }
-        for (String table : BACKUP_TABLES) if (backup.optJSONArray(table) == null) {
+        int required = oldFormat ? LEGACY_BACKUP_TABLES : BACKUP_TABLES.length;
+        for (int index = 0; index < required; index++) if (backup.optJSONArray(BACKUP_TABLES[index]) == null) {
+            String table = BACKUP_TABLES[index];
             throw new IllegalArgumentException("Backup incompleto: " + table);
         }
         SQLiteDatabase db = getWritableDatabase();
@@ -365,7 +643,8 @@ public final class AppDatabase extends SQLiteOpenHelper {
         try {
             for (String table : BACKUP_TABLES) db.delete(table, null, null);
             for (String table : BACKUP_TABLES) {
-                JSONArray rows = backup.getJSONArray(table);
+                JSONArray rows = backup.optJSONArray(table);
+                if (rows == null) continue;
                 for (int i = 0; i < rows.length(); i++) {
                     JSONObject row = rows.getJSONObject(i);
                     ContentValues values = new ContentValues();
@@ -380,6 +659,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
                     db.insertOrThrow(table, null, values);
                 }
             }
+            if (oldFormat) migrateOldGross(db);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();

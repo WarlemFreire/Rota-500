@@ -19,7 +19,9 @@ public final class CoreSelfTest {
         stopsAtGoal();
         learnsIncrementally();
         throttlesOcrWithoutMissingNewOffer();
-        System.out.println("CoreSelfTest: 15 testes aprovados");
+        keepsOneTruthForMoney();
+        filtersOdometerAndPauses();
+        System.out.println("CoreSelfTest: 17 testes aprovados");
     }
 
     private static void parsesOffer() {
@@ -168,6 +170,37 @@ public final class CoreSelfTest {
         check(!animatedMap.shouldRead(22_640, 150, false),
                 "movimento forte contínuo não prolonga o OCR rápido");
         check(animatedMap.shouldRead(23_000, 150, true), "análise solicitada é imediata");
+    }
+
+    private static void keepsOneTruthForMoney() {
+        List<MoneyLedger.Entry> entries = List.of(
+                new MoneyLedger.Entry(1, 1, "LEGACY", "ANTERIOR", 10000, 0, false),
+                new MoneyLedger.Entry(2, 2, "PLATFORM", "UBER", 15000, 15000, false),
+                new MoneyLedger.Entry(3, 3, "PLATFORM", "UBER", 18000, 15000, false),
+                new MoneyLedger.Entry(4, 4, "PLATFORM", "99", 12000, 12000, false),
+                new MoneyLedger.Entry(5, 5, "EXTRA", "PARTICULAR", 5000, 0, false),
+                new MoneyLedger.Entry(6, 6, "PLATFORM", "99", 14000, 12000, false),
+                new MoneyLedger.Entry(7, 7, "EXTRA", "PARTICULAR", 1000, 0, true));
+        check(MoneyLedger.at(entries, 2).totalCents() == 10000, "primeira leitura após migração estabelece base");
+        check(MoneyLedger.at(entries, 5).totalCents() == 18000,
+                "plataforma substitui e particular acumula");
+        check(MoneyLedger.at(entries, 7).totalCents() == 20000,
+                "lançamento desfeito não entra no saldo");
+    }
+
+    private static void filtersOdometerAndPauses() {
+        Double distance = WorkMath.odometerKm(List.of(
+                new WorkMath.Odometer(0, 113000),
+                new WorkMath.Odometer(3_600_000, 0),
+                new WorkMath.Odometer(7_200_000, 180000),
+                new WorkMath.Odometer(10_800_000, 113080)));
+        close(distance, 80, "odômetro inválido é ignorado e próxima âncora corrige");
+        check(WorkMath.odometerKm(List.of(new WorkMath.Odometer(0, 113000))) == null,
+                "sem duas âncoras não há distância");
+        long active = WorkMath.activeMillis(0, 7_200_000,
+                List.of(new WorkMath.Span(0, 7_200_000)),
+                List.of(new WorkMath.Span(3_600_000, 5_400_000)));
+        check(active == 5_400_000, "pausa sai do tempo ativo");
     }
 
     private static StrategySnapshot snapshot(double currentGross, int workedMinutes, boolean unsafe) {

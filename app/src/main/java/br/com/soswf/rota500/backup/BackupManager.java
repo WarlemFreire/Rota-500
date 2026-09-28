@@ -14,6 +14,7 @@ import java.util.Date;
 import java.util.Locale;
 
 import br.com.soswf.rota500.data.AppDatabase;
+import br.com.soswf.rota500.data.AppPreferences;
 import org.json.JSONObject;
 
 public final class BackupManager {
@@ -27,7 +28,9 @@ public final class BackupManager {
         String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date());
         Uri file = DocumentsContract.createDocument(resolver, parent, "application/json", "rota500-backup-" + stamp + ".json");
         if (file == null) throw new IllegalStateException("Não foi possível criar o arquivo");
-        byte[] data = AppDatabase.get(context).exportData().toString(2).getBytes(StandardCharsets.UTF_8);
+        JSONObject snapshot = AppDatabase.get(context).exportData();
+        snapshot.put("data_settings", new AppPreferences(context).exportDataSettings());
+        byte[] data = snapshot.toString(2).getBytes(StandardCharsets.UTF_8);
         try (OutputStream output = resolver.openOutputStream(file, "w")) {
             if (output == null) throw new IllegalStateException("Pasta sem permissão de escrita");
             output.write(data);
@@ -46,6 +49,8 @@ public final class BackupManager {
                 bytes.write(buffer, 0, read);
             }
         }
-        AppDatabase.get(context).restoreData(new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8)));
+        JSONObject snapshot = new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
+        AppDatabase.get(context).restoreData(snapshot);
+        new AppPreferences(context).restoreDataSettings(snapshot.optJSONObject("data_settings"));
     }
 }

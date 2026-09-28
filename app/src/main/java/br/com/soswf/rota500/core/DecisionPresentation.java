@@ -63,6 +63,6 @@ public final class DecisionPresentation {
     }
 
     public String compactDetails() {
-        return kmValue + "/km • " + hourValue + "/h • nota " + ratingValue;
+        return kmValue + "/km oferta • " + hourValue + "/h • nota " + ratingValue;
     }
 }

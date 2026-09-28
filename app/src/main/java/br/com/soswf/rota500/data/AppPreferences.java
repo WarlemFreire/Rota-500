@@ -2,6 +2,7 @@ package br.com.soswf.rota500.data;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import org.json.JSONObject;
 
 import br.com.soswf.rota500.core.DecisionRules;
 
@@ -42,6 +43,27 @@ public final class AppPreferences {
     public double operatingCostPerKm() { return readDouble("operating_cost_km", 1.50); }
     public void setOperatingCostPerKm(double value) { writeDouble("operating_cost_km", value); }
 
+    public double fuelCostPerKm() { return readDouble("fuel_cost_km", 0); }
+    public void setFuelCostPerKm(double value) { writeDouble("fuel_cost_km", value); }
+
+    public double wearCostPerKm() { return readDouble("wear_cost_km", 0); }
+    public void setWearCostPerKm(double value) { writeDouble("wear_cost_km", value); }
+
+    public long monthlyFinancingCents() { return preferences.getLong("monthly_financing_cents", 0); }
+    public void setMonthlyFinancingCents(long value) {
+        preferences.edit().putLong("monthly_financing_cents", Math.max(0, value)).apply();
+    }
+
+    public long otherMonthlyCents() { return preferences.getLong("other_monthly_cents", 0); }
+    public void setOtherMonthlyCents(long value) {
+        preferences.edit().putLong("other_monthly_cents", Math.max(0, value)).apply();
+    }
+
+    public int workDaysPerMonth() { return preferences.getInt("work_days_month", 22); }
+    public void setWorkDaysPerMonth(int value) {
+        preferences.edit().putInt("work_days_month", Math.max(1, Math.min(31, value))).apply();
+    }
+
     public double desiredNetPerHour() { return readDouble("desired_net_hour", 35.0); }
     public void setDesiredNetPerHour(double value) { writeDouble("desired_net_hour", value); }
 
@@ -64,6 +86,8 @@ public final class AppPreferences {
 
     public String backupTreeUri() { return preferences.getString("backup_tree_uri", ""); }
     public void setBackupTreeUri(String value) { preferences.edit().putString("backup_tree_uri", value).apply(); }
+    public long lastBackupAt() { return preferences.getLong("last_backup_at", 0); }
+    public void setLastBackupAt(long value) { preferences.edit().putLong("last_backup_at", value).apply(); }
 
     public boolean dynamicCapturePending() { return preferences.getBoolean("dynamic_capture_pending", false); }
     public void requestDynamicCapture() { preferences.edit().putBoolean("dynamic_capture_pending", true).apply(); }
@@ -99,6 +123,40 @@ public final class AppPreferences {
                 longRideMinutes(),
                 0.95,
                 operatingCostPerKm());
+    }
+
+    /** Data settings only. API keys and the local backup folder stay on this device. */
+    public JSONObject exportDataSettings() throws Exception {
+        JSONObject data = new JSONObject();
+        data.put("daily_goal", dailyGoal());
+        data.put("planned_minutes", plannedMinutes());
+        data.put("min_per_km", minimumGrossPerKm());
+        data.put("min_long_hour", minimumLongRidePerHour());
+        data.put("operating_cost_km", operatingCostPerKm());
+        data.put("fuel_cost_km", fuelCostPerKm());
+        data.put("wear_cost_km", wearCostPerKm());
+        data.put("monthly_financing_cents", monthlyFinancingCents());
+        data.put("other_monthly_cents", otherMonthlyCents());
+        data.put("work_days_month", workDaysPerMonth());
+        data.put("desired_net_hour", desiredNetPerHour());
+        data.put("strategy_interval_minutes", strategyIntervalMinutes());
+        return data;
+    }
+
+    public void restoreDataSettings(JSONObject data) {
+        if (data == null) return;
+        setDailyGoal(data.optDouble("daily_goal", dailyGoal()));
+        setPlannedMinutes(data.optInt("planned_minutes", plannedMinutes()));
+        setMinimumGrossPerKm(data.optDouble("min_per_km", minimumGrossPerKm()));
+        setMinimumLongRidePerHour(data.optDouble("min_long_hour", minimumLongRidePerHour()));
+        setOperatingCostPerKm(data.optDouble("operating_cost_km", operatingCostPerKm()));
+        setFuelCostPerKm(data.optDouble("fuel_cost_km", fuelCostPerKm()));
+        setWearCostPerKm(data.optDouble("wear_cost_km", wearCostPerKm()));
+        setMonthlyFinancingCents(data.optLong("monthly_financing_cents", monthlyFinancingCents()));
+        setOtherMonthlyCents(data.optLong("other_monthly_cents", otherMonthlyCents()));
+        setWorkDaysPerMonth(data.optInt("work_days_month", workDaysPerMonth()));
+        setDesiredNetPerHour(data.optDouble("desired_net_hour", desiredNetPerHour()));
+        setStrategyIntervalMinutes(data.optInt("strategy_interval_minutes", strategyIntervalMinutes()));
     }
 
     private double readDouble(String key, double fallback) {
