@@ -485,6 +485,7 @@ public final class MainActivity extends Activity {
         NumberPad.show(this, prompt, 2, "", cents -> {
             if (cents <= 0 && "PARTICULAR".equals(source)) return;
             try {
+                FinancialToday before = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
                 lastMoneyEventId = "PARTICULAR".equals(source)
                         ? database.recordExtra(source, cents)
                         : database.recordPlatformTotal(source, cents);
@@ -492,6 +493,12 @@ public final class MainActivity extends Activity {
                 uiHandler.removeCallbacks(hideUndo);
                 uiHandler.postDelayed(hideUndo, 8_000L);
                 refresh();
+                if (!"PARTICULAR".equals(source) && before.balance().legacyCents() > 0
+                        && before.balance().platformCents(source) == 0
+                        && database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm())
+                                .balance().totalCents() == before.balance().totalCents()) {
+                    toast("Primeiro total de " + source + " usado como base; saldo anterior preservado.");
+                }
             } catch (RuntimeException error) { toast("Não foi possível registrar o valor."); }
         });
     }
