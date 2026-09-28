@@ -19,19 +19,15 @@ final class NumberPad {
 
     static void show(Context context, String question, int decimals, String unit,
             LongConsumer onSave) {
-        Dialog dialog = new Dialog(context);
-        LinearLayout root = new LinearLayout(context);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(Ui.dp(context, 18), Ui.dp(context, 18), Ui.dp(context, 18), Ui.dp(context, 16));
-        root.setBackground(Ui.rounded(Ui.CARD, 20, Ui.BORDER, context));
-        TextView title = Ui.text(context, question, 19);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        root.addView(title);
-        TextView amount = Ui.text(context, "", 38);
+        LinearLayout root = Ui.column(context);
+        TextView amount = Ui.number(context, "", 46);
         amount.setGravity(Gravity.CENTER);
-        amount.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         amount.setTextColor(Ui.GREEN);
-        root.addView(amount);
+        root.addView(amount, new LinearLayout.LayoutParams(-1, Ui.dp(context, 72)));
+        TextView hint = Ui.text(context, decimals == 2 ? "Digite o valor com centavos, sem vírgula" : "Informe o valor inteiro", 12);
+        hint.setTextColor(Ui.MUTED);
+        hint.setGravity(Gravity.CENTER);
+        root.addView(hint);
         final long[] digits = {0};
         Runnable render = () -> {
             if (decimals == 2) amount.setText(String.format(Locale.forLanguageTag("pt-BR"),
@@ -44,7 +40,8 @@ final class NumberPad {
             LinearLayout row = new LinearLayout(context);
             for (String key : rowKeys) {
                 Button keyButton = Ui.secondaryButton(context, key);
-                keyButton.setTextSize(25);
+                keyButton.setTextSize(27);
+                keyButton.setContentDescription("C".equals(key) ? "Limpar valor" : "⌫".equals(key) ? "Apagar último dígito" : key);
                 keyButton.setMinHeight(Ui.dp(context, 64));
                 LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0,
                         Ui.dp(context, 64), 1);
@@ -59,22 +56,13 @@ final class NumberPad {
             }
             root.addView(row);
         }
-        Button save = Ui.primaryButton(context, "SALVAR");
+        Button save = Ui.primaryButton(context, "Salvar valor");
         root.addView(save, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(context, 64)));
+        Dialog dialog = Ui.sheet(context, question, root);
         save.setOnClickListener(v -> {
             dialog.dismiss();
             onSave.accept(digits[0]);
         });
-        dialog.setContentView(root);
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawableResource(android.R.color.transparent);
-            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            window.setGravity(Gravity.BOTTOM);
-        }
-        dialog.show();
-        window = dialog.getWindow();
-        if (window != null) window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 }

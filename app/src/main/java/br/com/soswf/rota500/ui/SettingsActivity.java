@@ -36,40 +36,47 @@ public final class SettingsActivity extends Activity {
         int p = (int) (18 * getResources().getDisplayMetrics().density);
         root.setPadding(p, p, p, p);
         scroll.addView(root);
-        root.addView(Ui.title(this, "Meta e regras"));
+        LinearLayout screen = Ui.column(this);
+        screen.addView(Ui.pageHeader(this, "Ajustes", ""));
+        LinearLayout goalFields = Ui.disclosure(this, root, "Meta e réguas", "chart", true);
 
-        root.addView(Ui.sectionTitle(this, "Objetivo da jornada"));
 
-        goal = Ui.field(this, root, "Meta bruta diária (R$)", number(preferences.dailyGoal()), true);
-        plannedHours = Ui.field(this, root, "Jornada planejada (horas, máximo eficiente 12)", number(preferences.plannedMinutes() / 60.0), true);
-        minKm = Ui.field(this, root, "Régua mínima (R$/km total)", number(preferences.minimumGrossPerKm()), true);
-        minLongHour = Ui.field(this, root, "Corrida longa: mínimo bruto (R$/h)", number(preferences.minimumLongRidePerHour()), true);
-        costKm = Ui.field(this, root, "Custo total (R$/km: combustível, manutenção e desgaste)", number(preferences.operatingCostPerKm()), true);
-        root.addView(Ui.text(this, "Se o custo por km superar a régua, o custo prevalece. Confira esse valor no seu carro antes de usar a recomendação.", 13));
-        desiredNet = Ui.field(this, root, "Líquido desejado em particular (R$/h)", number(preferences.desiredNetPerHour()), true);
-        weather = Ui.field(this, root, "Clima atual (correção manual)", preferences.weather(), false);
 
-        root.addView(Ui.sectionTitle(this, "IA estratégica opcional"));
-        root.addView(Ui.text(this, "Use qualquer provedor barato com API HTTPS compatível com chat-completions. Apenas dados agregados são enviados. Sem configuração, o motor local continua funcionando.", 13));
-        endpoint = Ui.field(this, root, "Endpoint completo HTTPS", preferences.aiEndpoint(), false);
-        model = Ui.field(this, root, "Identificador do modelo econômico", preferences.aiModel(), false);
-        apiKey = Ui.field(this, root, "Chave da API (não entra no backup)", preferences.aiApiKey(), false);
+        goal = Ui.field(this, goalFields, "Meta bruta diária (R$)", number(preferences.dailyGoal()), true);
+        plannedHours = Ui.field(this, goalFields, "Jornada planejada (horas, máximo eficiente 12)", number(preferences.plannedMinutes() / 60.0), true);
+        minKm = Ui.field(this, goalFields, "Régua mínima (R$/km total)", number(preferences.minimumGrossPerKm()), true);
+        minLongHour = Ui.field(this, goalFields, "Corrida longa: mínimo bruto (R$/h)", number(preferences.minimumLongRidePerHour()), true);
+        costKm = Ui.field(this, goalFields, "Custo total (R$/km: combustível, manutenção e desgaste)", number(preferences.operatingCostPerKm()), true);
+        goalFields.addView(Ui.text(this, "Se o custo por km superar a régua, o custo prevalece. Confira esse valor no seu carro antes de usar a recomendação.", 13));
+        desiredNet = Ui.field(this, goalFields, "Líquido desejado em particular (R$/h)", number(preferences.desiredNetPerHour()), true);
+        weather = Ui.field(this, goalFields, "Clima atual (correção manual)", preferences.weather(), false);
+
+        LinearLayout aiFields = Ui.disclosure(this, root, "IA estratégica", "chart", false);
+        aiFields.addView(Ui.text(this, "Use qualquer provedor barato com API HTTPS compatível com chat-completions. Apenas dados agregados são enviados. Sem configuração, o motor local continua funcionando.", 13));
+        endpoint = Ui.field(this, aiFields, "Endpoint completo HTTPS", preferences.aiEndpoint(), false);
+        model = Ui.field(this, aiFields, "Identificador do modelo econômico", preferences.aiModel(), false);
+        apiKey = Ui.field(this, aiFields, "Chave da API (não entra no backup)", preferences.aiApiKey(), false);
         apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        strategyHours = Ui.field(this, root, "Intervalo da estratégia externa (1 a 24 horas)", number(preferences.strategyIntervalMinutes() / 60.0), true);
+        strategyHours = Ui.field(this, aiFields, "Intervalo da estratégia externa (1 a 24 horas)", number(preferences.strategyIntervalMinutes() / 60.0), true);
 
-        root.addView(Ui.sectionTitle(this, "Áreas inseguras"));
+        LinearLayout riskFields = Ui.disclosure(this, root, "Áreas inseguras", "route", false);
         riskList = Ui.text(this, "", 14);
-        root.addView(riskList);
-        Button addRisk = Ui.button(this, "Marcar minha última localização como área insegura");
+        riskFields.addView(riskList);
+        Button addRisk = Ui.secondaryButton(this, "Marcar última localização");
         addRisk.setOnClickListener(v -> showRiskDialog());
-        root.addView(addRisk);
-        Button folder = Ui.button(this, "Trocar pasta do backup (pode ser Google Drive)");
+        riskFields.addView(addRisk);
+        Button folder = Ui.secondaryButton(this, "Pasta do backup");
         folder.setOnClickListener(v -> selectBackupFolder());
+        Ui.buttonIcon(folder, "backup", Ui.MUTED);
         root.addView(folder);
         Button save = Ui.button(this, "Salvar configurações");
         save.setOnClickListener(v -> save());
-        root.addView(save);
-        setContentView(scroll);
+        screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout dock = Ui.column(this);
+        dock.setPadding(p, 0, p, Ui.dp(this, 8));
+        dock.addView(save);
+        screen.addView(dock);
+        Ui.install(this, screen);
         refreshRiskList();
     }
 

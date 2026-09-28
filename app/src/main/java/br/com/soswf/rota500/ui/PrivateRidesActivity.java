@@ -27,11 +27,13 @@ public final class PrivateRidesActivity extends Activity {
         int p = (int) (18 * getResources().getDisplayMetrics().density);
         root.setPadding(p, p, p, p);
         scroll.addView(root);
-        root.addView(Ui.title(this, "Corridas particulares"));
+        LinearLayout screen = Ui.column(this);
+        screen.addView(Ui.pageHeader(this, "Corridas particulares", ""));
         list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         root.addView(list);
-        setContentView(scroll);
+        screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        Ui.install(this, screen);
     }
 
     @Override protected void onResume() { super.onResume(); refresh(); }
@@ -53,15 +55,16 @@ public final class PrivateRidesActivity extends Activity {
                     ride.destination == null ? "" : ride.destination,
                     ride.price, ride.status, database.clientReliability(ride.phone));
             TextView card = Ui.text(this, text, 15);
-            card.setPadding(18, 18, 18, 8);
-            list.addView(card);
-            Button status = Ui.button(this, "Alterar status");
+            LinearLayout container = Ui.card(this);
+            container.addView(card);
+            Button status = Ui.secondaryButton(this, "Alterar status");
             status.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Status da corrida")
                     .setItems(statuses, (dialog, which) -> {
                         database.updatePrivateRideStatus(ride.id, statuses[which]);
                         refresh();
                     }).show());
-            list.addView(status);
+            container.addView(status);
+            list.addView(container);
         }
     }
 }

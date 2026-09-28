@@ -37,47 +37,52 @@ public final class QuoteActivity extends Activity {
         int p = (int) (18 * getResources().getDisplayMetrics().density);
         root.setPadding(p, p, p, p);
         scroll.addView(root);
-        root.addView(Ui.title(this, "Corrida particular"));
+        LinearLayout screen = Ui.column(this);
+        screen.addView(Ui.pageHeader(this, "Novo orçamento", ""));
+        LinearLayout customerFields = Ui.disclosure(this, root, "Cliente e trajeto", "car", true);
 
-        client = Ui.field(this, root, "Cliente", "", false);
-        phone = Ui.field(this, root, "Telefone", "", false);
-        scheduled = Ui.field(this, root, "Data e hora", "", false);
-        origin = Ui.field(this, root, "Origem", "", false);
-        destination = Ui.field(this, root, "Destino", "", false);
-        stops = Ui.field(this, root, "Paradas", "", false);
-        passengers = Ui.field(this, root, "Passageiros", "1", true);
-        luggage = Ui.field(this, root, "Bagagem", "", false);
-        tripType = Ui.field(this, root, "Tipo (ida / ida e volta)", "Ida", false);
-        payment = Ui.field(this, root, "Pagamento", "A combinar", false);
-        notes = Ui.field(this, root, "Observações", "", false);
+        client = Ui.field(this, customerFields, "Cliente", "", false);
+        phone = Ui.field(this, customerFields, "Telefone", "", false);
+        scheduled = Ui.field(this, customerFields, "Data e hora", "", false);
+        origin = Ui.field(this, customerFields, "Origem", "", false);
+        destination = Ui.field(this, customerFields, "Destino", "", false);
+        stops = Ui.field(this, customerFields, "Paradas", "", false);
+        passengers = Ui.field(this, customerFields, "Passageiros", "1", true);
+        luggage = Ui.field(this, customerFields, "Bagagem", "", false);
+        tripType = Ui.field(this, customerFields, "Tipo (ida / ida e volta)", "Ida", false);
+        payment = Ui.field(this, customerFields, "Pagamento", "A combinar", false);
+        notes = Ui.field(this, customerFields, "Observações", "", false);
 
-        root.addView(Ui.sectionTitle(this, "Estimativa operacional"));
-        pickupKm = Ui.field(this, root, "Km até buscar", "0", true);
-        passengerKm = Ui.field(this, root, "Km com passageiro", "0", true);
-        returnKm = Ui.field(this, root, "Km de retorno vazio", "0", true);
-        pickupMin = Ui.field(this, root, "Minutos até buscar", "0", true);
-        passengerMin = Ui.field(this, root, "Minutos com passageiro", "0", true);
-        returnMin = Ui.field(this, root, "Minutos de retorno", "0", true);
-        waitingMin = Ui.field(this, root, "Minutos de espera", "0", true);
-        costKm = Ui.field(this, root, "Custo operacional R$/km", money(preferences.operatingCostPerKm()), true);
-        desiredNet = Ui.field(this, root, "Líquido desejado R$/h", money(preferences.desiredNetPerHour()), true);
-        appNet = Ui.field(this, root, "Alternativa líquida estimada nos apps R$/h (ajuste manualmente)",
+        LinearLayout tripFields = Ui.disclosure(this, root, "Distância e duração", "route", true);
+        pickupKm = Ui.field(this, tripFields, "Km até buscar", "0", true);
+        passengerKm = Ui.field(this, tripFields, "Km com passageiro", "0", true);
+        returnKm = Ui.field(this, tripFields, "Km de retorno vazio", "0", true);
+        pickupMin = Ui.field(this, tripFields, "Minutos até buscar", "0", true);
+        passengerMin = Ui.field(this, tripFields, "Minutos com passageiro", "0", true);
+        returnMin = Ui.field(this, tripFields, "Minutos de retorno", "0", true);
+        waitingMin = Ui.field(this, tripFields, "Minutos de espera", "0", true);
+        LinearLayout costFields = Ui.disclosure(this, root, "Custos e margem", "wallet", false);
+        costKm = Ui.field(this, costFields, "Custo operacional R$/km", money(preferences.operatingCostPerKm()), true);
+        desiredNet = Ui.field(this, costFields, "Líquido desejado R$/h", money(preferences.desiredNetPerHour()), true);
+        appNet = Ui.field(this, costFields, "Alternativa líquida estimada nos apps R$/h (ajuste manualmente)",
                 money(preferences.desiredNetPerHour()), true);
-        tolls = Ui.field(this, root, "Pedágios e estacionamento", "0", true);
-        margin = Ui.field(this, root, "Margem adicional (%)", "10", true);
+        tolls = Ui.field(this, costFields, "Pedágios e estacionamento", "0", true);
+        margin = Ui.field(this, costFields, "Margem adicional (%)", "10", true);
 
         Button calculate = Ui.button(this, "Calcular orçamento");
         calculate.setOnClickListener(v -> calculate());
+        Ui.buttonIcon(calculate, "chart", Ui.SURFACE);
         root.addView(calculate);
         resultView = Ui.text(this, "", 18);
         root.addView(resultView);
-        Button save = Ui.button(this, "Salvar orçamento");
+        Button save = Ui.secondaryButton(this, "Salvar orçamento");
         save.setOnClickListener(v -> save());
         root.addView(save);
-        Button share = Ui.button(this, "Compartilhar texto do orçamento");
+        Button share = Ui.secondaryButton(this, "Compartilhar orçamento");
         share.setOnClickListener(v -> share());
         root.addView(share);
-        setContentView(scroll);
+        screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        Ui.install(this, screen);
     }
 
     private void calculate() {
@@ -99,7 +104,7 @@ public final class QuoteActivity extends Activity {
     }
 
     private void save() {
-        if (lastResult == null) calculate();
+        calculate();
         if (lastResult == null) return;
         AppDatabase.get(this).insertQuote(text(client), text(phone), text(scheduled), text(origin), text(destination),
                 text(stops), Ui.integer(passengers, 1), text(luggage), text(tripType), text(payment), text(notes),
@@ -108,7 +113,7 @@ public final class QuoteActivity extends Activity {
     }
 
     private void share() {
-        if (lastResult == null) calculate();
+        calculate();
         if (lastResult == null) return;
         String message = String.format(Locale.forLanguageTag("pt-BR"),
                 "Orçamento de corrida particular\nCliente: %s\nData/hora: %s\nOrigem: %s\nDestino: %s\nParadas: %s\nValor: R$ %.2f\nPagamento: %s\nObservações: %s\n\nSujeito à confirmação de disponibilidade.",
