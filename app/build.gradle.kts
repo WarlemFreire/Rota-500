@@ -10,8 +10,8 @@ android {
         applicationId = "br.com.soswf.rota500"
         minSdk = 30
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
         ndk {
             // O MVP será instalado no Moto G56 5G, que usa ARM de 64 bits.
             abiFilters += "arm64-v8a"

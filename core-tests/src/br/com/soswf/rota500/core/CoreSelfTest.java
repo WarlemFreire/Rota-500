@@ -18,7 +18,8 @@ public final class CoreSelfTest {
         reviewsUncertainUnsafeOffer();
         stopsAtGoal();
         learnsIncrementally();
-        System.out.println("CoreSelfTest: 14 testes aprovados");
+        throttlesOcrWithoutMissingNewOffer();
+        System.out.println("CoreSelfTest: 15 testes aprovados");
     }
 
     private static void parsesOffer() {
@@ -145,6 +146,28 @@ public final class CoreSelfTest {
         bucket.update(50, 10);
         close(bucket.expectedGrossPerHour(35, 2), 37.5, "média bayesiana");
         close(bucket.expectedIdleMinutes(15, 2), 15.0, "espera bayesiana");
+    }
+
+    private static void throttlesOcrWithoutMissingNewOffer() {
+        OcrCadence cadence = new OcrCadence();
+        check(cadence.shouldRead(10_000, 480, false), "primeiro quadro deve ser lido");
+        check(!cadence.shouldRead(10_120, 10, false), "animação não inicia novo OCR");
+        check(cadence.shouldRead(10_550, 10, false), "segunda leitura durante transição");
+        check(!cadence.shouldRead(10_670, 110, false), "respeitar limite mínimo mesmo com nova oferta");
+        check(cadence.shouldRead(10_790, 10, false), "nova oferta deve ser lida rapidamente");
+        cadence.offerSeen(10_790);
+        check(cadence.shouldRead(11_350, 0, false), "confirmar oferta recente");
+        check(!cadence.shouldRead(11_470, 0, false), "tela parada não roda OCR continuamente");
+        check(cadence.shouldRead(16_000, 0, false), "verificação esparsa em repouso");
+
+        OcrCadence animatedMap = new OcrCadence();
+        check(animatedMap.shouldRead(20_000, 480, false), "primeira leitura do mapa");
+        for (long time = 20_120; time <= 22_520; time += 120) {
+            animatedMap.shouldRead(time, 150, false);
+        }
+        check(!animatedMap.shouldRead(22_640, 150, false),
+                "movimento forte contínuo não prolonga o OCR rápido");
+        check(animatedMap.shouldRead(23_000, 150, true), "análise solicitada é imediata");
     }
 
     private static StrategySnapshot snapshot(double currentGross, int workedMinutes, boolean unsafe) {

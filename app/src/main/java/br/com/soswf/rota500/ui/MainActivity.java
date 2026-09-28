@@ -150,7 +150,7 @@ public final class MainActivity extends Activity {
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
         hourValue = addMetric(metrics, "R$/HORA", "R$ 0", Ui.AMBER);
-        activeTimeValue = addMetric(metrics, "ATIVO", "0:00", Ui.BLUE);
+        activeTimeValue = addMetric(metrics, "JORNADA", "0:00", Ui.BLUE);
         offersValue = addMetric(metrics, "BOAS/OFERTAS", "0/0", Ui.GREEN);
         root.addView(metrics);
 
@@ -495,10 +495,12 @@ public final class MainActivity extends Activity {
         double remaining = Math.max(0, goal - gross);
         grossValue.setText(money(gross));
         goalDetails.setText(remaining > 0
-                ? String.format(Locale.forLanguageTag("pt-BR"), "Faltam R$ %.0f para a meta de R$ %.0f", remaining, goal)
-                : String.format(Locale.forLanguageTag("pt-BR"), "Meta de R$ %.0f alcançada", goal));
+                ? "Faltam " + money(remaining) + " para a meta de " + money(goal)
+                : "Meta de " + money(goal) + " alcançada");
         goalProgress.setProgress(goal <= 0 ? 0 : (int) Math.min(1000, Math.round(gross / goal * 1000)));
-        hourValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "R$ %.0f", stats.robustGrossPerHour));
+        hourValue.setText(stats.robustGrossPerHour > 0
+                ? String.format(Locale.forLanguageTag("pt-BR"), "R$ %.0f", stats.robustGrossPerHour)
+                : "—");
         activeTimeValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d:%02d", worked / 60, worked % 60));
         offersValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d/%d",
                 stats.viableOffersLastHour, stats.offersLastHour));

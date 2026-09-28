@@ -38,6 +38,7 @@ import br.com.soswf.rota500.R;
 import br.com.soswf.rota500.accessibility.DynamicHeatAnalyzer;
 import br.com.soswf.rota500.core.DecisionPresentation;
 import br.com.soswf.rota500.core.DecisionRules;
+import br.com.soswf.rota500.core.OcrCadence;
 import br.com.soswf.rota500.core.OfferData;
 import br.com.soswf.rota500.core.OfferRuleEngine;
 import br.com.soswf.rota500.core.OfferTextParser;
@@ -55,19 +56,17 @@ public final class ScreenCaptureService extends Service {
     public static final String EXTRA_RESULT_DATA = "result_data";
     private static final String CHANNEL = "rota500_screen_reader_v2";
     private static final int NOTIFICATION_ID = 501;
-    // A tela é lida continuamente. Quadros antigos são descartados enquanto o OCR trabalha.
+    // Only a small sample is read from most frames. OCR is reserved for a new screen.
     private static final int CAPTURE_MAX_WIDTH = 720;
-    private static final long FRAME_CHECK_INTERVAL_MS = 80L;
-    private static final long CHANGED_SCREEN_OCR_INTERVAL_MS = 450L;
-    private static final long IDLE_SCREEN_OCR_INTERVAL_MS = 2_500L;
+    private static final long FRAME_CHECK_INTERVAL_MS = 120L;
     private static final long SAME_OFFER_COOLDOWN_MS = 8_000L;
-    private static final int SAMPLE_COLUMNS = 8;
-    private static final int SAMPLE_ROWS = 12;
-    private static final int SAMPLE_CHANGE_POINTS = 16;
+    private static final int SAMPLE_COLUMNS = 20;
+    private static final int SAMPLE_ROWS = 24;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final OfferTextParser parser = new OfferTextParser();
     private final OfferRuleEngine ruleEngine = new OfferRuleEngine();
+    private OcrCadence cadence = new OcrCadence();
     private AppDatabase database;
     private AppPreferences preferences;
     private TextRecognizer recognizer;
@@ -78,7 +77,6 @@ public final class ScreenCaptureService extends Service {
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
     private boolean processing;
-    private long lastOcrAt;
     private long lastFrameCheckAt;
     private long lastOfferAt;
     private long lastOfferSeenAt;
@@ -132,6 +130,9 @@ public final class ScreenCaptureService extends Service {
 
     private void beginProjection(int resultCode, Intent resultData) {
         releaseProjection();
+        cadence = new OcrCadence();
+        hasScreenSample = false;
+        lastFrameCheckAt = 0;
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         projection = manager.getMediaProjection(resultCode, resultData);
         if (projection == null) throw new IllegalStateException("Captura não autorizada");
@@ -168,15 +169,14 @@ public final class ScreenCaptureService extends Service {
             long now = System.currentTimeMillis();
             if (processing || now - lastFrameCheckAt < FRAME_CHECK_INTERVAL_MS) return;
             lastFrameCheckAt = now;
-            boolean changed = screenChanged(image);
-            long interval = changed ? CHANGED_SCREEN_OCR_INTERVAL_MS : IDLE_SCREEN_OCR_INTERVAL_MS;
-            if (now - lastOcrAt < interval) return;
+            int changedPoints = screenChangePoints(image);
+            rememberCurrentScreenSample();
+            boolean dynamicPending = preferences.dynamicCapturePending();
+            if (!cadence.shouldRead(now, changedPoints, dynamicPending)) return;
             if (database.activeSessionId() <= 0) {
                 mainHandler.post(this::stopCapture);
                 return;
             }
-            rememberCurrentScreenSample();
-            lastOcrAt = now;
             processing = true;
             Bitmap bitmap = bitmapFrom(image);
             if (bitmap == null) {
@@ -191,15 +191,15 @@ public final class ScreenCaptureService extends Service {
         }
     }
 
-    private boolean screenChanged(Image image) {
-        if (image.getPlanes().length == 0) return true;
+    private int screenChangePoints(Image image) {
+        if (image.getPlanes().length == 0) return SAMPLE_COLUMNS * SAMPLE_ROWS;
         Image.Plane plane = image.getPlanes()[0];
         ByteBuffer buffer = plane.getBuffer();
         int width = image.getWidth();
         int height = image.getHeight();
         int pixelStride = plane.getPixelStride();
         int rowStride = plane.getRowStride();
-        int startY = height * 35 / 100;
+        int startY = height * 28 / 100;
         int usableHeight = Math.max(1, height - startY - 1);
         int changedPoints = 0;
         int index = 0;
@@ -214,16 +214,16 @@ public final class ScreenCaptureService extends Service {
                     int blue = buffer.get(offset + 2) & 0xff;
                     int color = (red << 16) | (green << 8) | blue;
                     currentScreenSample[index] = color;
-                    if (hasScreenSample && colorDistance(color, lastScreenSample[index]) >= 84) {
+                    if (hasScreenSample && colorDistance(color, lastScreenSample[index]) >= 70) {
                         changedPoints++;
                     }
                     index++;
                 }
             }
         } catch (RuntimeException ignored) {
-            return true;
+            return SAMPLE_COLUMNS * SAMPLE_ROWS;
         }
-        return !hasScreenSample || changedPoints >= SAMPLE_CHANGE_POINTS;
+        return hasScreenSample ? changedPoints : SAMPLE_COLUMNS * SAMPLE_ROWS;
     }
 
     private int colorDistance(int first, int second) {
@@ -263,14 +263,19 @@ public final class ScreenCaptureService extends Service {
         }
         Bitmap ocrBitmap = prepareForOcr(bitmap);
         if (ocrBitmap != bitmap) bitmap.recycle();
-        InputImage input = InputImage.fromBitmap(ocrBitmap, 0);
-        recognizer.process(input)
-                .addOnSuccessListener(this::handleRecognizedText)
-                .addOnFailureListener(error -> { })
-                .addOnCompleteListener(task -> {
-                    ocrBitmap.recycle();
-                    processing = false;
-                });
+        try {
+            InputImage input = InputImage.fromBitmap(ocrBitmap, 0);
+            java.util.concurrent.Executor captureExecutor = runnable -> captureHandler.post(runnable);
+            recognizer.process(input)
+                    .addOnSuccessListener(captureExecutor, this::handleRecognizedText)
+                    .addOnCompleteListener(captureExecutor, task -> {
+                        ocrBitmap.recycle();
+                        processing = false;
+                    });
+        } catch (RuntimeException error) {
+            ocrBitmap.recycle();
+            processing = false;
+        }
     }
 
     private Bitmap prepareForOcr(Bitmap source) {
@@ -317,6 +322,7 @@ public final class ScreenCaptureService extends Service {
         // o aviso anterior imediatamente, mesmo quando as corridas vêm em sequência.
         if (offer.sourceHash.equals(lastOfferHash)
                 && now - lastOfferAt < SAME_OFFER_COOLDOWN_MS) return;
+        cadence.offerSeen(now);
         lastOfferHash = offer.sourceHash;
         lastOfferAt = now;
         // O banco evita duplicata, mas uma oferta igual após desaparecer da tela
