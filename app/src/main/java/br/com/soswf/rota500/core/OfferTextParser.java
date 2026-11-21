@@ -20,7 +20,15 @@ public final class OfferTextParser {
     private static final Pattern RATING_WITH_LABEL = Pattern.compile(
             "(?:nota|★|☆|⭐)\\s*:?\\s*([1-5](?:[.,][0-9]{1,2}))", Pattern.CASE_INSENSITIVE);
 
+    /** Oferta lida e, quando a confiança cai, o motivo em português (para o diagnóstico). */
+    public record Reading(OfferData offer, List<String> issues) { }
+
     public OfferData parse(String platform, List<String> visibleTexts) {
+        return read(platform, visibleTexts).offer();
+    }
+
+    public Reading read(String platform, List<String> visibleTexts) {
+        List<String> issues = new ArrayList<>();
         String joined = normalize(visibleTexts);
         FareReading reading = parseFare(joined);
         long fare = reading.value;
@@ -41,17 +49,23 @@ public final class OfferTextParser {
         if (mins.size() == 2) confidence += 0.25;
         if (platform != null && !platform.isBlank()) confidence += 0.10;
         // Uma oferta sem embarque ou com outros preços na mesma tela exige conferência manual.
+        if (fare <= 0) issues.add("nenhum valor em R$ reconhecido");
+        if (reading.ambiguous) issues.add("mais de um valor em R$ na tela");
+        if (kms.size() != 2) issues.add(kms.size() + " distância(s) em km (esperadas 2: embarque e viagem)");
+        if (mins.size() != 2) issues.add(mins.size() + " tempo(s) em min (esperados 2: embarque e viagem)");
         if (reading.ambiguous || kms.size() != 2 || mins.size() != 2) confidence = Math.min(confidence, 0.60);
         double calculatedRate = pickupKm + tripKm <= 0 ? 0 : (fare / 100.0) / (pickupKm + tripKm);
         if (shownRatePerKm > 0 && calculatedRate > 0
                 && Math.abs(shownRatePerKm - calculatedRate) > Math.max(0.18, shownRatePerKm * 0.12)) {
             confidence = Math.min(confidence, 0.60);
+            issues.add(String.format(Locale.ROOT, "R$/km da tela (%.2f) diferente do calculado (%.2f)",
+                    shownRatePerKm, calculatedRate));
         }
 
         String signature = platform + "|" + fare + "|" + pickupKm + "|" + tripKm
                 + "|" + pickupMinutes + "|" + tripMinutes + "|" + passengerRating + "|" + destination;
 
-        return new OfferData(
+        return new Reading(new OfferData(
                 platform,
                 fare,
                 pickupKm,
@@ -61,7 +75,7 @@ public final class OfferTextParser {
                 passengerRating,
                 destination,
                 sha256(signature),
-                confidence);
+                confidence), issues);
     }
 
     private FareReading parseFare(String text) {

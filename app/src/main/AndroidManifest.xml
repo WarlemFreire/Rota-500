@@ -30,6 +30,9 @@
             android:name=".ui.SettingsActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.DiagnosticsActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.FinanceActivity"
             android:exported="false" />
         <activity
@@ -46,6 +49,12 @@
             android:name=".location.TrackingService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <provider
+            android:name=".diag.FrameProvider"
+            android:authorities="br.com.soswf.rota500.diagframe"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <receiver
             android:name=".location.JourneyBootReceiver"

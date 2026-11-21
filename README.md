@@ -17,6 +17,7 @@ O arquivo `CLOUD_BUILD.md` explica a compilação e a publicação de versões p
 - **Dia = jornada:** tudo o que acontece numa jornada que passa da meia-noite conta no dia em que ela começou. Se depois da meia-noite o total da Uber/99 digitado for menor, o app pergunta se a plataforma zerou. O histórico foi reprocessado com essa regra depois de uma cópia do banco.
 - **Corrida particular concluída** entra no ganho do dia; desfazer o status anula o lançamento.
 - **Jornada esquecida:** notificação permanente com tempo ativo e bruto; pergunta "Ainda trabalhando?" após 1 h ativa sem ganho (pausa: 2 h); três perguntas sem resposta encerram a jornada no último ganho, com opção de reabrir. Depois de reiniciar o celular, um aviso pede para continuar ou encerrar. O limite de 18 h foi removido.
+- **Diagnóstico da leitura** (Mais): mostra se a captura chega preta, o texto lido pelo OCR e em que etapa cada oferta foi descartada; compartilha relatório e o último quadro.
 - **Importar do Copiloto** (Mais): lê o backup JSON do app Copiloto, mostra uma prévia com os ajustes (jornadas esquecidas fechadas, erros de digitação ignorados) e grava tudo numa transação, depois de copiar o banco. Também traz desgaste e combustível medido.
 - **Buscar atualizações** (Mais): baixa a versão mais nova das Releases do GitHub e abre o instalador. Ajustes > Atualizações liga o canal de teste. O repositório é público desde 21/11/2026, então o botão já encontra as versões.
 

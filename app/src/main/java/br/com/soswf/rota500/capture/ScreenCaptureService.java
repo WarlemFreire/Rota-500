@@ -41,7 +41,9 @@ import br.com.soswf.rota500.core.DecisionRules;
 import br.com.soswf.rota500.core.OcrCadence;
 import br.com.soswf.rota500.core.OfferData;
 import br.com.soswf.rota500.core.OfferRuleEngine;
+import br.com.soswf.rota500.core.OfferScreen;
 import br.com.soswf.rota500.core.OfferTextParser;
+import br.com.soswf.rota500.diag.DiagnosticLog;
 import br.com.soswf.rota500.core.RuleDecision;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
@@ -85,6 +87,12 @@ public final class ScreenCaptureService extends Service {
     private final int[] lastScreenSample = new int[SAMPLE_COLUMNS * SAMPLE_ROWS];
     private final int[] currentScreenSample = new int[SAMPLE_COLUMNS * SAMPLE_ROWS];
     private boolean hasScreenSample;
+    // Modo diagnóstico: contadores em memória, gravados em lote.
+    private DiagnosticLog diagnostics;
+    private long diagFrames;
+    private long diagBlackFrames;
+    private long diagFlushedAt;
+    private volatile boolean lastFrameBlack;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -92,6 +100,7 @@ public final class ScreenCaptureService extends Service {
         preferences = new AppPreferences(this);
         recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         decisionAlert = new DecisionAlert(this, mainHandler);
+        diagnostics = new DiagnosticLog(this);
         captureThread = new HandlerThread("rota500-screen-capture");
         captureThread.start();
         captureHandler = new Handler(captureThread.getLooper());
@@ -172,6 +181,8 @@ public final class ScreenCaptureService extends Service {
             lastFrameCheckAt = now;
             int changedPoints = screenChangePoints(image);
             rememberCurrentScreenSample();
+            lastFrameBlack = OfferScreen.mostlyBlack(currentScreenSample, currentScreenSample.length);
+            countDiagnosticFrame(now);
             boolean dynamicPending = preferences.dynamicCapturePending();
             if (!cadence.shouldRead(now, changedPoints, dynamicPending)) return;
             if (database.activeSessionId() <= 0) {
@@ -190,6 +201,16 @@ public final class ScreenCaptureService extends Service {
         } finally {
             if (image != null) image.close();
         }
+    }
+
+    private void countDiagnosticFrame(long now) {
+        diagFrames++;
+        if (lastFrameBlack) diagBlackFrames++;
+        if (now - diagFlushedAt < 5_000L) return;
+        diagFlushedAt = now;
+        diagnostics.addFrames(diagFrames, diagBlackFrames);
+        diagFrames = 0;
+        diagBlackFrames = 0;
     }
 
     private int screenChangePoints(Image image) {
@@ -264,6 +285,8 @@ public final class ScreenCaptureService extends Service {
         }
         Bitmap ocrBitmap = prepareForOcr(bitmap);
         if (ocrBitmap != bitmap) bitmap.recycle();
+        // Diagnóstico: guarda exatamente o recorte que o OCR vai ler.
+        if (diagnostics.enabled() && diagnostics.frameRequested()) diagnostics.saveFrame(ocrBitmap);
         try {
             InputImage input = InputImage.fromBitmap(ocrBitmap, 0);
             java.util.concurrent.Executor captureExecutor = runnable -> captureHandler.post(runnable);
@@ -304,25 +327,47 @@ public final class ScreenCaptureService extends Service {
             }
         }
         long now = System.currentTimeMillis();
-        if (!looksLikeOffer(lines)) {
+        if (lines.isEmpty()) {
+            diagnostics.record(lastFrameBlack ? DiagnosticLog.Stage.FRAME_BLACK : DiagnosticLog.Stage.OCR_EMPTY,
+                    lastFrameBlack ? "a tela capturada chegou preta" : "", lines);
+        }
+        List<String> missing = OfferScreen.missing(lines);
+        if (!lines.isEmpty() && !missing.isEmpty()) {
+            diagnostics.record(DiagnosticLog.Stage.NOT_OFFER, "faltou: " + String.join(", ", missing), lines);
+        }
+        if (!missing.isEmpty()) {
             // Ao sair uma oferta, libera até uma oferta seguinte com valores iguais.
             if (lastOfferSeenAt > 0 && now - lastOfferSeenAt >= 500L) lastOfferHash = "";
             return;
         }
         lastOfferSeenAt = now;
         String joined = String.join(" ", lines);
-        OfferData offer = parser.parse(platformFor(joined), lines);
+        OfferTextParser.Reading reading = parser.read(OfferScreen.platformFor(joined), lines);
+        OfferData offer = reading.offer();
         DecisionRules rules = CarCosts.load(database, preferences).decisionRules(preferences);
         boolean unsafe = database.isDestinationUnsafe(offer.destination);
         RuleDecision decision = ruleEngine.evaluate(offer, rules, unsafe);
         // Uma leitura parcial não deve virar uma orientação vaga. O quadro seguinte
         // será analisado imediatamente e só uma decisão binária será mostrada.
-        if (decision.outcome == RuleDecision.Outcome.REVIEW) return;
-        if (offer.fareCents <= 0) return;
+        if (decision.outcome == RuleDecision.Outcome.REVIEW) {
+            diagnostics.record(DiagnosticLog.Stage.LOW_CONFIDENCE, String.join("; ", reading.issues())
+                    + (reading.issues().isEmpty() ? decision.reason : ""), lines);
+            return;
+        }
+        if (offer.fareCents <= 0) {
+            diagnostics.record(DiagnosticLog.Stage.NO_FARE, "", lines);
+            return;
+        }
         // Ofertas diferentes não têm espera entre si. Uma nova decisão substitui
         // o aviso anterior imediatamente, mesmo quando as corridas vêm em sequência.
         if (offer.sourceHash.equals(lastOfferHash)
-                && now - lastOfferAt < SAME_OFFER_COOLDOWN_MS) return;
+                && now - lastOfferAt < SAME_OFFER_COOLDOWN_MS) {
+            diagnostics.record(DiagnosticLog.Stage.SAME_OFFER, "", null);
+            return;
+        }
+        diagnostics.record(DiagnosticLog.Stage.DECIDED, String.format(Locale.ROOT,
+                "%s · R$ %.2f · %.1f km · %d min · %s", offer.platform, offer.fareReais(), offer.totalKm(),
+                offer.totalMinutes(), decision.reason), lines);
         cadence.offerSeen(now);
         lastOfferHash = offer.sourceHash;
         lastOfferAt = now;
@@ -338,25 +383,6 @@ public final class ScreenCaptureService extends Service {
                 presentation.finalAdvice, presentation.compactDetails(), presentation.tone);
         mainHandler.post(() -> decisionAlert.show(presentation));
         broadcast(ACTION_DECISION);
-    }
-
-    private boolean looksLikeOffer(List<String> lines) {
-        String text = String.join(" ", lines).toLowerCase(Locale.forLanguageTag("pt-BR"));
-        boolean money = text.contains("r$");
-        boolean distance = text.contains(" km") || text.contains("quilômetr");
-        boolean time = text.contains(" min") || text.contains("minuto");
-        boolean action = text.contains("aceitar") || text.contains("recusar")
-                || text.contains("rejeitar") || text.contains("solicitação")
-                || text.contains("solicitacao") || text.contains("nova corrida")
-                || text.contains("nova viagem") || text.contains("selecionar");
-        return money && distance && time && action;
-    }
-
-    private String platformFor(String text) {
-        String value = text.toLowerCase(Locale.ROOT);
-        if (value.contains("uber")) return "UBER";
-        if (value.contains("99pop") || value.contains("99 motorista") || value.contains("99 moto")) return "99";
-        return "APP";
     }
 
     private void createChannel() {

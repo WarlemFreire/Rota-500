@@ -413,6 +413,7 @@ public final class MainActivity extends Activity {
         menuAction(body, dialog, "Jornada e leitura", "scan", this::showJourney);
         menuAction(body, dialog, "Estratégia do dia", "chart", this::showStrategy);
         menuAction(body, dialog, "Analisar mapa dinâmico", "route", this::requestDynamicMap);
+        menuAction(body, dialog, "Diagnóstico da leitura", "scan", () -> startActivity(new Intent(this, DiagnosticsActivity.class)));
         menuAction(body, dialog, "Ajustes", "settings", () -> startActivity(new Intent(this, SettingsActivity.class)));
         menuAction(body, dialog, "Salvar backup", "backup", this::backup);
         menuAction(body, dialog, "Restaurar backup", "undo", this::chooseRestoreFile);

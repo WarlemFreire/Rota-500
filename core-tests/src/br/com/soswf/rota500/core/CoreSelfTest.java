@@ -28,7 +28,26 @@ public final class CoreSelfTest {
         picksUpdateByBuildNumber();
         readsJson();
         importsCopilotoBackup();
-        System.out.println("CoreSelfTest: 24 testes aprovados");
+        explainsDiscardedReadings();
+        System.out.println("CoreSelfTest: 25 testes aprovados");
+    }
+
+    private static void explainsDiscardedReadings() {
+        check(OfferScreen.missing(List.of("R$ 7,34", "5 min (1.1 km)", "Selecionar")).isEmpty(), "oferta completa");
+        List<String> missing = OfferScreen.missing(List.of("Procurando viagens", "R$ 120,00 hoje"));
+        check(missing.contains(OfferScreen.DISTANCE) && missing.contains(OfferScreen.ACTION)
+                && !missing.contains(OfferScreen.MONEY), "diz o que faltou para ser oferta");
+        OfferTextParser.Reading reading = new OfferTextParser().read("UBER",
+                List.of("R$ 32,50", "+R$ 2,00", "3 min", "5 min • 2,1 km", "28 min • 14 km", "Aceitar"));
+        check(reading.offer().confidence < 0.95, "leitura ambígua continua abaixo da régua");
+        check(reading.issues().contains("mais de um valor em R$ na tela")
+                && reading.issues().stream().anyMatch(i -> i.startsWith("3 tempo")), "motivos do descarte");
+        check(new OfferTextParser().read("UBER", List.of("R$ 32,50", "5 min • 2,1 km", "28 min • 14,0 km",
+                "Destino: Centro")).issues().isEmpty(), "oferta limpa não tem motivos");
+        int[] black = new int[100];
+        int[] map = new int[100];
+        for (int i = 0; i < 100; i++) map[i] = i < 50 ? 0x203040 : 0xF0F0F0;
+        check(OfferScreen.mostlyBlack(black, 100) && !OfferScreen.mostlyBlack(map, 100), "quadro preto detectado");
     }
 
     private static void readsJson() {

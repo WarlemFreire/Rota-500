@@ -69,3 +69,13 @@ O Copiloto é outro app (web), com formato `app: "copiloto"`, `versao: 1`. Mais 
 | Q45 | Gasto acima de R$ 1.000 num lançamento e odômetro final menor que o inicial (ou mais de 2.000 km) ficam de fora e aparecem na prévia. |
 | Q46 | Custos importados: desgaste do Copiloto e combustível temporário medido nos abastecimentos com odômetro (valor pago ÷ km); sem dados suficientes, pelos preços e consumo configurados. |
 | — | Jornada com o mesmo início de uma já gravada não é importada de novo. Ofertas, contextos, metas por período e o modelo estatístico do Copiloto não têm equivalente e ficam de fora. |
+
+## F. Modo diagnóstico da leitura
+
+Mais > "Diagnóstico da leitura". Não muda nenhuma decisão de oferta; só registra, quando ligado:
+
+- quadros analisados e quantos chegaram pretos (proteção de tela da Uber/99 ou tela apagada);
+- cada leitura do OCR com a etapa em que parou: quadro preto, OCR vazio, não parece oferta (e o que faltou), leitura incompleta (e o motivo: mais de um R$, número de km/min diferente de 2, R$/km divergente), sem valor, oferta repetida ou decisão mostrada;
+- o recorte exato enviado ao OCR, sob pedido ("Salvar o próximo quadro lido").
+
+Tudo fica na pasta interna do app (últimos 300 eventos) até o motorista compartilhar o relatório ou o quadro. O texto lido pode conter endereços e nomes de passageiros.
