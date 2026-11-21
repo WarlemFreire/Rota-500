@@ -12,7 +12,7 @@ O fluxo `.github/workflows/build-apk.yml` roda a cada push na `main` e nas branc
 
 O versionCode é o número da execução do build no GitHub (`N`), que sempre cresce. Por isso qualquer versão mais nova instala por cima da anterior, seja teste ou estável. O APK publicado se chama `rota500-<versão>-b<N>.apk`; o botão **Buscar atualizações** lê esse número.
 
-O botão só encontra versões quando o repositório for **público**. Com o repositório privado, ele responde "Sem acesso".
+O repositório é público, então o botão consulta as Releases sem login. Se ele voltar a ser privado, o botão responde "Sem acesso".
 
 ## Assinatura (passo único)
 
