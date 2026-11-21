@@ -34,6 +34,7 @@ import java.util.Locale;
 import br.com.soswf.rota500.ai.StrategyCoordinator;
 import br.com.soswf.rota500.backup.BackupManager;
 import br.com.soswf.rota500.capture.ScreenCaptureService;
+import br.com.soswf.rota500.core.CopilotoImport;
 import br.com.soswf.rota500.core.JourneyWatch;
 import br.com.soswf.rota500.core.StrategyAdvice;
 import br.com.soswf.rota500.data.AppDatabase;
@@ -55,6 +56,7 @@ public final class MainActivity extends Activity {
     private static final int NOTIFICATION_REQUEST = 21;
     private static final int BACKUP_FOLDER_REQUEST = 30;
     private static final int RESTORE_FILE_REQUEST = 31;
+    private static final int COPILOTO_FILE_REQUEST = 32;
     private static final int SCREEN_CAPTURE_REQUEST = 50;
     private AppDatabase database;
     private AppPreferences preferences;
@@ -415,6 +417,86 @@ public final class MainActivity extends Activity {
         menuAction(body, dialog, "Salvar backup", "backup", this::backup);
         menuAction(body, dialog, "Restaurar backup", "undo", this::chooseRestoreFile);
         menuAction(body, dialog, "Buscar atualizações", "backup", this::checkUpdates);
+        menuAction(body, dialog, "Importar do Copiloto", "plus", this::chooseCopilotoFile);
+    }
+
+    private void chooseCopilotoFile() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                .addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(intent, COPILOTO_FILE_REQUEST);
+    }
+
+    /** Lê o backup do Copiloto, mostra a prévia e só grava depois da confirmação. */
+    private void previewCopiloto(Uri file) {
+        toast("Lendo o backup do Copiloto…");
+        new Thread(() -> {
+            try {
+                String json;
+                try (java.io.InputStream input = getContentResolver().openInputStream(file);
+                     java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream()) {
+                    if (input == null) throw new IllegalStateException("Arquivo inacessível.");
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        if (bytes.size() + read > 50 * 1024 * 1024) throw new IllegalStateException("Arquivo maior que 50 MB.");
+                        bytes.write(buffer, 0, read);
+                    }
+                    json = bytes.toString("UTF-8");
+                }
+                CopilotoImport.Plan plan = CopilotoImport.plan(json, database.sessionStarts(), java.time.ZoneId.systemDefault());
+                runOnUiThread(() -> confirmCopiloto(plan));
+            } catch (Exception error) {
+                String message = error.getMessage() == null ? "Arquivo inválido." : error.getMessage();
+                runOnUiThread(() -> toast("Não foi possível ler: " + message));
+            }
+        }, "rota500-copiloto-read").start();
+    }
+
+    private void confirmCopiloto(CopilotoImport.Plan plan) {
+        if (plan.sessions().isEmpty()) {
+            new AlertDialog.Builder(this).setTitle("Nada novo para importar")
+                    .setMessage(plan.skippedDuplicates() + " jornada(s) desse backup já estão no Rota 500.")
+                    .setPositiveButton("OK", null).show();
+            return;
+        }
+        StringBuilder text = new StringBuilder(String.format(Locale.forLanguageTag("pt-BR"),
+                "%d jornadas · bruto %s · %d gastos (%s) · %d pontos de GPS.",
+                plan.sessions().size(), money(plan.grossCents() / 100.0), plan.expenses().size(),
+                money(plan.expenseCents() / 100.0), plan.points().size()));
+        if (plan.skippedDuplicates() > 0) text.append("\n").append(plan.skippedDuplicates()).append(" já importada(s) ficam de fora.");
+        if (plan.wearPerKm() != null && plan.fuelPerKm() != null) {
+            text.append(String.format(Locale.forLanguageTag("pt-BR"),
+                    "\n\nCustos: desgaste R$ %.2f/km e combustível temporário R$ %.2f/km (%s).",
+                    plan.wearPerKm(), plan.fuelPerKm(), plan.fuelSource()));
+        }
+        if (!plan.problems().isEmpty()) {
+            text.append("\n\nAjustes e itens ignorados:");
+            for (String problem : plan.problems()) text.append("\n• ").append(problem);
+        }
+        text.append("\n\nUma cópia do banco atual é feita antes.");
+        new AlertDialog.Builder(this).setTitle("Importar do Copiloto?")
+                .setMessage(text.toString())
+                .setPositiveButton("Importar", (d, w) -> importCopiloto(plan))
+                .setNegativeButton("Cancelar", null).show();
+    }
+
+    private void importCopiloto(CopilotoImport.Plan plan) {
+        new Thread(() -> {
+            try {
+                if (!database.safetyCopy("antes-copiloto")) throw new IllegalStateException("Não foi possível copiar o banco atual.");
+                int count = database.importCopiloto(plan);
+                // Q46: custos reais do Copiloto.
+                if (plan.wearPerKm() != null) preferences.setWearCostPerKm(plan.wearPerKm());
+                if (plan.fuelPerKm() != null) preferences.setFuelCostPerKm(plan.fuelPerKm());
+                runOnUiThread(() -> {
+                    refresh();
+                    toast(count + " jornadas importadas do Copiloto.");
+                });
+            } catch (Exception error) {
+                String message = error.getMessage() == null ? "falha desconhecida" : error.getMessage();
+                runOnUiThread(() -> toast("Importação cancelada, nada foi gravado: " + message));
+            }
+        }, "rota500-copiloto-import").start();
     }
 
     /** Q19-Q21: consulta as versões publicadas e instala a mais nova. */
@@ -882,6 +964,10 @@ public final class MainActivity extends Activity {
             getContentResolver().takePersistableUriPermission(uri, flags);
             preferences.setBackupTreeUri(uri.toString());
             writeBackup(uri);
+        }
+        if (requestCode == COPILOTO_FILE_REQUEST && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            previewCopiloto(data.getData());
+            return;
         }
         if (requestCode == RESTORE_FILE_REQUEST && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri file = data.getData();

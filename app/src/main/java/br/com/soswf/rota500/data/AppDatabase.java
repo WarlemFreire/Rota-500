@@ -23,6 +23,7 @@ import br.com.soswf.rota500.core.StrategyAdvice;
 import br.com.soswf.rota500.core.MoneyLedger;
 import br.com.soswf.rota500.core.WorkMath;
 import br.com.soswf.rota500.core.FuelMath;
+import br.com.soswf.rota500.core.CopilotoImport;
 import br.com.soswf.rota500.core.GpsDistance;
 
 public final class AppDatabase extends SQLiteOpenHelper {
@@ -740,6 +741,89 @@ public final class AppDatabase extends SQLiteOpenHelper {
         day.setTimeInMillis(at);
         return day.get(Calendar.YEAR) * 10_000 + (day.get(Calendar.MONTH) + 1) * 100
                 + day.get(Calendar.DAY_OF_MONTH);
+    }
+
+    /** Inícios de jornadas já gravadas, para não importar o mesmo backup duas vezes. */
+    public java.util.Set<Long> sessionStarts() {
+        java.util.Set<Long> starts = new java.util.HashSet<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT start_at FROM work_sessions", null)) {
+            while (cursor.moveToNext()) starts.add(cursor.getLong(0));
+        }
+        return starts;
+    }
+
+    /** Cópia de segurança do arquivo do banco, na pasta interna do app. */
+    public boolean safetyCopy(String label) { return copyDatabaseFile(context, label); }
+
+    /** Grava o plano de importação do Copiloto numa única transação (tudo ou nada). */
+    public synchronized int importCopiloto(CopilotoImport.Plan plan) {
+        SQLiteDatabase db = getWritableDatabase();
+        java.util.Map<String, Long> ids = new java.util.HashMap<>();
+        java.util.Map<String, Integer> days = new java.util.HashMap<>();
+        db.beginTransaction();
+        try {
+            for (CopilotoImport.Session session : plan.sessions()) {
+                ContentValues values = new ContentValues();
+                values.put("start_at", session.start());
+                values.put("end_at", session.end());
+                values.put("gross_cents", session.grossCents());
+                values.put("start_zone", "Copiloto");
+                values.put("end_zone", "Copiloto");
+                values.put("day_key", session.dayKey());
+                values.put("learned", 1);
+                ids.put(session.id(), db.insertOrThrow("work_sessions", null, values));
+                days.put(session.id(), session.dayKey());
+            }
+            for (CopilotoImport.Money money : plan.money()) {
+                ContentValues values = moneyValues(money.at(), days.get(money.sessionId()),
+                        ids.get(money.sessionId()), money.kind(), money.source(), money.cents());
+                values.put("baseline_cents", money.baselineCents());
+                values.put("voided", money.voided() ? 1 : 0);
+                db.insertOrThrow("money_events", null, values);
+            }
+            for (CopilotoImport.Pause pause : plan.pauses()) {
+                ContentValues values = new ContentValues();
+                values.put("session_id", ids.get(pause.sessionId()));
+                values.put("start_at", pause.start());
+                values.put("end_at", pause.end());
+                values.put("reason", pause.reason());
+                db.insertOrThrow("work_pauses", null, values);
+            }
+            for (CopilotoImport.Expense expense : plan.expenses()) {
+                ContentValues values = new ContentValues();
+                values.put("occurred_at", expense.at());
+                values.put("day_key", expense.dayKey());
+                values.put("session_id", expense.sessionId() == null ? 0L : ids.get(expense.sessionId()));
+                values.put("category", expense.category());
+                values.put("amount_cents", expense.cents());
+                if (expense.quantity() != null) values.put("quantity", expense.quantity());
+                if (expense.odometerKm() != null) values.put("odometer_km", expense.odometerKm());
+                values.put("full_tank", 0);
+                db.insertOrThrow("expenses", null, values);
+            }
+            for (CopilotoImport.Odometer odometer : plan.odometers()) {
+                ContentValues values = new ContentValues();
+                values.put("session_id", ids.get(odometer.sessionId()));
+                values.put("occurred_at", odometer.at());
+                values.put("day_key", days.get(odometer.sessionId()));
+                values.put("km", odometer.km());
+                db.insertOrThrow("odometer_entries", null, values);
+            }
+            for (CopilotoImport.Point point : plan.points()) {
+                ContentValues values = new ContentValues();
+                values.put("session_id", ids.get(point.sessionId()));
+                values.put("captured_at", point.at());
+                values.put("latitude", point.latitude());
+                values.put("longitude", point.longitude());
+                // O Copiloto não guarda a precisão; os pontos já foram filtrados por ele.
+                values.put("accuracy", 0);
+                values.put("speed", -1);
+                values.put("provider", "copiloto");
+                db.insertOrThrow("location_points", null, values);
+            }
+            db.setTransactionSuccessful();
+            return plan.sessions().size();
+        } finally { db.endTransaction(); }
     }
 
     public boolean insertOffer(OfferData offer, RuleDecision decision, boolean unsafe) {

@@ -26,7 +26,65 @@ public final class CoreSelfTest {
         watchesForgottenJourney();
         keepsEarningsWhenPlatformResetsAtMidnight();
         picksUpdateByBuildNumber();
-        System.out.println("CoreSelfTest: 22 testes aprovados");
+        readsJson();
+        importsCopilotoBackup();
+        System.out.println("CoreSelfTest: 24 testes aprovados");
+    }
+
+    private static void readsJson() {
+        Object value = MiniJson.parse("{\"a\":[1,2.5,-3e2],\"b\":\"x\\\"y\\u00e7\",\"c\":null,\"d\":true}");
+        java.util.Map<?, ?> map = (java.util.Map<?, ?>) value;
+        check(((List<?>) map.get("a")).get(2).equals(-300.0), "número com expoente");
+        check("x\"yç".equals(map.get("b")), "texto com escapes");
+        check(map.containsKey("c") && map.get("c") == null && Boolean.TRUE.equals(map.get("d")), "null e booleano");
+        boolean failed = false;
+        try { MiniJson.parse("{\"a\":1,}"); } catch (IllegalArgumentException expected) { failed = true; }
+        check(failed, "JSON quebrado é recusado");
+    }
+
+    private static void importsCopilotoBackup() {
+        long h = 3_600_000L;
+        long d1 = 1_795_000_000_000L; // duas jornadas no mesmo dia
+        String json = "{\"app\":\"copiloto\",\"versao\":1,\"config\":{\"custoDesgasteKm\":0.25,\"mixGnvPct\":100,"
+                + "\"precoGnv\":4.3,\"kmPorM3\":10,\"precoEtanol\":4,\"kmPorLitro\":7},\"dados\":{"
+                + "\"jornadas\":["
+                + "{\"id\":\"j1\",\"data\":\"2026-11-18\",\"horaInicio\":" + d1 + ",\"horaFim\":" + (d1 + 2 * h)
+                + ",\"odometroInicio\":1000,\"odometroFim\":1050,\"saldoInicial\":{}},"
+                + "{\"id\":\"j2\",\"data\":\"2026-11-18\",\"horaInicio\":" + (d1 + 5 * h) + ",\"horaFim\":" + (d1 + 60 * h)
+                + ",\"odometroInicio\":1050,\"odometroFim\":900,\"saldoInicial\":{\"uber\":31}},"
+                + "{\"id\":\"j3\",\"data\":\"2026-08-08\",\"horaInicio\":" + (d1 - 2000 * h) + ",\"horaFim\":" + (d1 - 1994 * h)
+                + ",\"origem\":\"planilha\"}],"
+                + "\"registros\":["
+                + "{\"jornadaId\":\"j1\",\"timestamp\":" + (d1 + h) + ",\"saldos\":{\"uber\":20},\"desfeito\":false},"
+                + "{\"jornadaId\":\"j1\",\"timestamp\":" + (d1 + h + 1) + ",\"saldos\":{\"uber\":31},\"desfeito\":false},"
+                + "{\"jornadaId\":\"j2\",\"timestamp\":" + (d1 + 6 * h) + ",\"saldos\":{\"uber\":80},\"desfeito\":false,"
+                + "\"avulso\":{\"valor\":10,\"tipo\":\"particular\"}},"
+                + "{\"jornadaId\":\"j2\",\"timestamp\":" + (d1 + 7 * h) + ",\"saldos\":{\"uber\":999},\"desfeito\":true}],"
+                + "\"corridas\":[{\"jornadaId\":\"j3\",\"timestamp\":" + (d1 - 1999 * h) + ",\"plataforma\":\"uber\",\"valorBruto\":15.01}],"
+                + "\"pausas\":[{\"jornadaId\":\"j2\",\"horaInicio\":" + (d1 + 5 * h + 1) + ",\"horaFim\":" + (d1 + 5 * h + 1800_000) + ",\"motivo\":\"abastecimento\"}],"
+                + "\"custos\":[{\"id\":\"c1\",\"jornadaId\":\"j2\",\"timestamp\":" + (d1 + 6 * h) + ",\"tipo\":\"gnv\",\"valor\":60,\"litros\":13,\"odometro\":1060},"
+                + "{\"id\":\"c2\",\"jornadaId\":\"j2\",\"timestamp\":" + (d1 + 6 * h) + ",\"tipo\":\"gnv\",\"valor\":114851,\"litros\":13,\"odometro\":1070}],"
+                + "\"trilha\":[{\"quando\":" + (d1 + 6 * h) + ",\"lat\":-22.6,\"lon\":-43.4}]}}";
+        java.time.ZoneId zone = java.time.ZoneId.of("America/Sao_Paulo");
+        CopilotoImport.Plan plan = CopilotoImport.plan(json, java.util.Set.of(), zone);
+        check(plan.sessions().size() == 3, "três jornadas importadas");
+        CopilotoImport.Session first = plan.sessions().get(1), second = plan.sessions().get(2);
+        check(first.grossCents() == 3100 && second.grossCents() == 4900 + 1000, "bruto por jornada usa o saldo inicial");
+        check(second.closedEarly() && second.end() == d1 + 6 * h, "jornada esquecida fecha no último ganho válido");
+        check(plan.sessions().get(0).grossCents() == 1501, "jornada de planilha soma as corridas");
+        check(plan.money().stream().anyMatch(m -> m.voided() && m.cents() == 99900), "registro desfeito entra anulado");
+        check(plan.money().stream().filter(m -> m.sessionId().equals("j2") && m.kind().equals("PLATFORM"))
+                .allMatch(m -> m.baselineCents() == 0), "segunda jornada do dia continua o total do dia");
+        check(plan.expenses().size() == 1 && plan.problems().stream().anyMatch(p -> p.contains("114851,00") || p.contains("114851.00")),
+                "gasto absurdo fica de fora e é relatado");
+        check(plan.odometers().stream().noneMatch(o -> o.km() == 900), "odômetro que volta para trás fica de fora");
+        check(plan.pauses().size() == 1 && plan.pauses().get(0).reason().equals("Abastecer"), "motivo da pausa traduzido");
+        check(plan.points().size() == 1 && plan.points().get(0).sessionId().equals("j2"), "ponto de GPS vai para a jornada certa");
+        close(plan.wearPerKm(), 0.25, "desgaste importado");
+        close(plan.fuelPerKm(), 0.43, "combustível pelos preços quando faltam abastecimentos");
+        CopilotoImport.Plan again = CopilotoImport.plan(json, java.util.Set.of(d1, d1 + 5 * h, d1 - 2000 * h), zone);
+        check(again.sessions().isEmpty() && again.skippedDuplicates() == 3 && again.expenses().isEmpty(),
+                "importar de novo não duplica");
     }
 
     private static void picksUpdateByBuildNumber() {

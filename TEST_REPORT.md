@@ -2,12 +2,14 @@
 
 | Verificação | Resultado |
 | --- | --- |
-| Testes Java do núcleo (`./run-core-tests.sh`) | 22 aprovados |
+| Testes Java do núcleo (`./run-core-tests.sh`) | 24 aprovados |
 | Custo de combustível por ciclos de tanque cheio | Coberto (ciclo único, 3 ciclos mais recentes, divergência de 30%) |
 | Distância por GPS (precisão, saltos, pausas) | Coberto |
 | Jornada esquecida (1 h, 2 h em pausa, 3 sem resposta, horário presumido) | Coberto |
 | Total da plataforma que zera à meia-noite | Coberto (confirmação e reprocessamento do histórico) |
 | Escolha da atualização por número do build e canal | Coberto |
+| Importação do Copiloto (dados sintéticos) | Coberto: total do dia entre jornadas, esquecida, planilha, erro de digitação, odômetro, reimportação |
+| Importação do Copiloto (backup real de 21/11, fora do repositório) | 40 jornadas, 38 dias, R$ 8.882,45, 222 h ativas, R$ 40,0/h, combustível R$ 0,343/km, 13 avisos |
 | Sintaxe Java e XML (`sh run-static-checks.sh`) | 46 Java e 26 XML válidos |
 | Compilação do app contra Android 16 (API 36) | Aprovada, com stubs do ML Kit (verificação local, sem gerar APK) |
 | Chamadas acima do Android 11 (API 30) | Todas protegidas por checagem de versão |

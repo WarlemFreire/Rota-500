@@ -56,3 +56,16 @@ são a referência de cada decisão.
 | Q36 | Encerrar manualmente após 1 h+ sem ganho pergunta: "Agora" ou "No último ganho". |
 | Q41 | Perguntas vibram uma vez, sem som. |
 | Q43 | Limite automático de 18 h removido. |
+
+## E. Importar o backup do Copiloto
+
+O Copiloto é outro app (web), com formato `app: "copiloto"`, `versao: 1`. Mais > "Importar do Copiloto" lê esse arquivo, mostra uma prévia e só grava depois da confirmação, numa transação única, após copiar o banco.
+
+| Q | Decisão |
+| --- | --- |
+| — | Saldos do Copiloto são o total do dia de cada plataforma e viram leituras de plataforma. Ganhos avulsos viram ganho particular, entrega ou outro. Jornadas de planilha somam as corridas (`valorBruto`). |
+| Q44 | Jornadas com mais de 14 h ativas foram esquecidas abertas: fecham no último ganho válido. |
+| — | Planilha não registra o tempo trabalhado: intervalo de mais de 2 h sem corrida conta como pausa. |
+| Q45 | Gasto acima de R$ 1.000 num lançamento e odômetro final menor que o inicial (ou mais de 2.000 km) ficam de fora e aparecem na prévia. |
+| Q46 | Custos importados: desgaste do Copiloto e combustível temporário medido nos abastecimentos com odômetro (valor pago ÷ km); sem dados suficientes, pelos preços e consumo configurados. |
+| — | Jornada com o mesmo início de uma já gravada não é importada de novo. Ofertas, contextos, metas por período e o modelo estatístico do Copiloto não têm equivalente e ficam de fora. |
