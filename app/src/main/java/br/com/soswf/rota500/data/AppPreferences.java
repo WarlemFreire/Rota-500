@@ -8,6 +8,8 @@ import br.com.soswf.rota500.core.DecisionRules;
 
 public final class AppPreferences {
     private static final String FILE = "rota500_preferences";
+    /** Sugestão inicial de desgaste (pneus, óleo, freios, revisões), sem depreciação (Q10, Q12). */
+    public static final double DEFAULT_WEAR_PER_KM = 0.20;
     private final SharedPreferences preferences;
 
     public AppPreferences(Context context) {
@@ -22,6 +24,20 @@ public final class AppPreferences {
                     .remove("last_decision_at")
                     .apply();
         }
+        migrateCostsToFuelAndWear();
+    }
+
+    /**
+     * Q1, Q13: o antigo "custo total R$/km" vira combustível temporário + desgaste, com o
+     * mesmo total. Assim nenhuma decisão de oferta muda no dia da atualização.
+     */
+    private void migrateCostsToFuelAndWear() {
+        if (preferences.getBoolean("costs_v5", false)) return;
+        double total = readDouble("operating_cost_km", 1.50);
+        double wear = wearCostPerKm() > 0 ? wearCostPerKm() : DEFAULT_WEAR_PER_KM;
+        writeDouble("wear_cost_km", wear);
+        writeDouble("fuel_cost_km", Math.max(0, total - wear));
+        preferences.edit().putBoolean("costs_v5", true).apply();
     }
 
     public double dailyGoal() { return readDouble("daily_goal", 500.0); }
@@ -40,10 +56,8 @@ public final class AppPreferences {
 
     public int longRideMinutes() { return preferences.getInt("long_minutes", 35); }
 
-    public double operatingCostPerKm() { return readDouble("operating_cost_km", 1.50); }
-    public void setOperatingCostPerKm(double value) { writeDouble("operating_cost_km", value); }
-
-    public double fuelCostPerKm() { return readDouble("fuel_cost_km", 0); }
+    /** Combustível temporário, usado até existir um ciclo de tanque cheio (Q9). */
+    public double fuelCostPerKm() { return readDouble("fuel_cost_km", 1.30); }
     public void setFuelCostPerKm(double value) { writeDouble("fuel_cost_km", value); }
 
     public double wearCostPerKm() { return readDouble("wear_cost_km", 0); }
@@ -116,14 +130,36 @@ public final class AppPreferences {
         preferences.edit().putLong("last_context_prompt", System.currentTimeMillis()).apply();
     }
 
-    public DecisionRules decisionRules() {
+    public DecisionRules decisionRules(double costPerKm) {
         return new DecisionRules(
                 minimumGrossPerKm(),
                 minimumLongRidePerHour(),
                 longRideMinutes(),
                 0.95,
-                operatingCostPerKm());
+                costPerKm);
     }
+
+    // Jornada esquecida (Q33-Q40): referência da contagem e perguntas sem resposta.
+    public long watchReference() { return preferences.getLong("watch_reference", 0); }
+    public int watchPrompts() { return preferences.getInt("watch_prompts", 0); }
+    public boolean watchPaused() { return preferences.getBoolean("watch_paused", false); }
+    public void setWatch(long reference, int prompts, boolean paused) {
+        preferences.edit().putLong("watch_reference", reference).putInt("watch_prompts", prompts)
+                .putBoolean("watch_paused", paused).apply();
+    }
+    /** "Sim, ainda trabalhando" ou "Ainda em pausa": a contagem recomeça agora (Q35). */
+    public void acknowledgeWatch(long now) {
+        preferences.edit().putLong("watch_ack", now).putInt("watch_prompts", 0).apply();
+    }
+    public long watchAcknowledgedAt() { return preferences.getLong("watch_ack", 0); }
+
+    /** Jornada encerrada automaticamente, que ainda pode ser reaberta. */
+    public long autoEndedSession() { return preferences.getLong("auto_ended_session", 0); }
+    public void setAutoEndedSession(long id) { preferences.edit().putLong("auto_ended_session", id).apply(); }
+
+    // Atualizações (Q25): canal de teste ligado por padrão durante o teste da 0.9.
+    public boolean testChannel() { return preferences.getBoolean("update_test_channel", true); }
+    public void setTestChannel(boolean value) { preferences.edit().putBoolean("update_test_channel", value).apply(); }
 
     /** Data settings only. API keys and the local backup folder stay on this device. */
     public JSONObject exportDataSettings() throws Exception {
@@ -132,7 +168,6 @@ public final class AppPreferences {
         data.put("planned_minutes", plannedMinutes());
         data.put("min_per_km", minimumGrossPerKm());
         data.put("min_long_hour", minimumLongRidePerHour());
-        data.put("operating_cost_km", operatingCostPerKm());
         data.put("fuel_cost_km", fuelCostPerKm());
         data.put("wear_cost_km", wearCostPerKm());
         data.put("monthly_financing_cents", monthlyFinancingCents());
@@ -140,16 +175,22 @@ public final class AppPreferences {
         data.put("work_days_month", workDaysPerMonth());
         data.put("desired_net_hour", desiredNetPerHour());
         data.put("strategy_interval_minutes", strategyIntervalMinutes());
+        data.put("costs_v5", true);
         return data;
     }
 
-    public void restoreDataSettings(JSONObject data) {
+    public void restoreDataSettings(JSONObject data) throws org.json.JSONException {
         if (data == null) return;
         setDailyGoal(data.optDouble("daily_goal", dailyGoal()));
         setPlannedMinutes(data.optInt("planned_minutes", plannedMinutes()));
         setMinimumGrossPerKm(data.optDouble("min_per_km", minimumGrossPerKm()));
         setMinimumLongRidePerHour(data.optDouble("min_long_hour", minimumLongRidePerHour()));
-        setOperatingCostPerKm(data.optDouble("operating_cost_km", operatingCostPerKm()));
+        if (data.has("operating_cost_km") && !data.has("costs_v5")) {
+            // Backup anterior à 0.9: mantém o total antigo dividido em combustível + desgaste.
+            double wear = data.optDouble("wear_cost_km", 0) > 0 ? data.optDouble("wear_cost_km", 0) : DEFAULT_WEAR_PER_KM;
+            data.put("wear_cost_km", wear);
+            data.put("fuel_cost_km", Math.max(0, data.optDouble("operating_cost_km", 1.50) - wear));
+        }
         setFuelCostPerKm(data.optDouble("fuel_cost_km", fuelCostPerKm()));
         setWearCostPerKm(data.optDouble("wear_cost_km", wearCostPerKm()));
         setMonthlyFinancingCents(data.optLong("monthly_financing_cents", monthlyFinancingCents()));

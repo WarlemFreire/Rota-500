@@ -14,7 +14,38 @@ public final class MoneyLedger {
         public long platformCents(String source) { return platforms.getOrDefault(source, 0L); }
     }
 
+    /** Uma leitura de total de plataforma; newCalendarDay indica que mudou a data desde a anterior. */
+    public record Reading(long cents, boolean newCalendarDay) { }
+
     private MoneyLedger() { }
+
+    /**
+     * Base de cálculo depois que o motorista confirma que a plataforma zerou o total do dia.
+     * O valor gravado continua cru (o que aparece na Uber/99); a base negativa soma o anterior.
+     */
+    public static long baselineAfterReset(long latestBaseline, long latestRawCents) {
+        return latestBaseline - latestRawCents;
+    }
+
+    /**
+     * Recalcula as bases de uma plataforma quando leituras de datas diferentes passam a
+     * pertencer à mesma jornada. Um total menor logo após a virada de data é tratado
+     * como zeramento da plataforma, não como correção.
+     */
+    public static long[] rebasedBaselines(List<Reading> readings, long firstBaseline) {
+        long[] baselines = new long[readings.size()];
+        long baseline = firstBaseline;
+        long lastRaw = -1;
+        for (int i = 0; i < readings.size(); i++) {
+            Reading reading = readings.get(i);
+            if (lastRaw >= 0 && reading.newCalendarDay() && reading.cents() < lastRaw) {
+                baseline = baselineAfterReset(baseline, lastRaw);
+            }
+            baselines[i] = baseline;
+            lastRaw = reading.cents();
+        }
+        return baselines;
+    }
 
     /** Entries must be in timestamp and ID order. */
     public static Balance at(List<Entry> entries, long untilInclusive) {

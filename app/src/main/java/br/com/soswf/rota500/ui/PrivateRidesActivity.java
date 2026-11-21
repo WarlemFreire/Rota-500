@@ -7,6 +7,7 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 import java.util.Locale;
@@ -38,6 +39,23 @@ public final class PrivateRidesActivity extends Activity {
 
     @Override protected void onResume() { super.onResume(); refresh(); }
 
+    /** Q3, Q4: CONCLUÍDA lança o valor recebido como ganho; sair de CONCLUÍDA anula. */
+    private void changeStatus(AppDatabase database, PrivateRideRecord ride, String status) {
+        if (!"CONCLUÍDA".equals(status)) {
+            database.setPrivateRideStatus(ride.id, status, 0);
+            if ("CONCLUÍDA".equals(ride.status)) Toast.makeText(this, "Ganho da corrida anulado.", Toast.LENGTH_SHORT).show();
+            refresh();
+            return;
+        }
+        long suggested = ride.receivedCents > 0 ? ride.receivedCents : Math.round(ride.price * 100);
+        NumberPad.show(this, "Valor recebido", 2, "", suggested, cents -> {
+            if (cents <= 0) return;
+            database.setPrivateRideStatus(ride.id, status, cents);
+            Toast.makeText(this, "Corrida concluída lançada no ganho de hoje.", Toast.LENGTH_SHORT).show();
+            refresh();
+        });
+    }
+
     private void refresh() {
         list.removeAllViews();
         AppDatabase database = AppDatabase.get(this);
@@ -48,21 +66,21 @@ public final class PrivateRidesActivity extends Activity {
         }
         for (PrivateRideRecord ride : rides) {
             String text = String.format(Locale.forLanguageTag("pt-BR"),
-                    "%s • %s\n%s → %s\nR$ %.2f • %s\n%s",
+                    "%s • %s\n%s → %s\nR$ %.2f • %s%s\n%s",
                     ride.client == null ? "Cliente" : ride.client,
                     ride.scheduledAt == null ? "sem data" : ride.scheduledAt,
                     ride.origin == null ? "" : ride.origin,
                     ride.destination == null ? "" : ride.destination,
-                    ride.price, ride.status, database.clientReliability(ride.phone));
+                    ride.price, ride.status,
+                    ride.receivedCents > 0 ? String.format(Locale.forLanguageTag("pt-BR"),
+                            " • R$ %.2f no ganho", ride.receivedCents / 100.0) : "",
+                    database.clientReliability(ride.phone));
             TextView card = Ui.text(this, text, 15);
             LinearLayout container = Ui.card(this);
             container.addView(card);
             Button status = Ui.secondaryButton(this, "Alterar status");
             status.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Status da corrida")
-                    .setItems(statuses, (dialog, which) -> {
-                        database.updatePrivateRideStatus(ride.id, statuses[which]);
-                        refresh();
-                    }).show());
+                    .setItems(statuses, (dialog, which) -> changeStatus(database, ride, statuses[which])).show());
             container.addView(status);
             list.addView(container);
         }

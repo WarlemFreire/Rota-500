@@ -22,7 +22,7 @@ import br.com.soswf.rota500.data.AppPreferences;
 public final class SettingsActivity extends Activity {
     private static final int BACKUP_FOLDER_REQUEST = 40;
     private AppPreferences preferences;
-    private EditText goal, plannedHours, minKm, minLongHour, costKm, desiredNet, weather;
+    private EditText goal, plannedHours, minKm, minLongHour, desiredNet, weather;
     private EditText endpoint, model, apiKey, strategyHours;
     private TextView riskList;
 
@@ -46,8 +46,9 @@ public final class SettingsActivity extends Activity {
         plannedHours = Ui.field(this, goalFields, "Jornada planejada (horas, máximo eficiente 12)", number(preferences.plannedMinutes() / 60.0), true);
         minKm = Ui.field(this, goalFields, "Régua mínima (R$/km total)", number(preferences.minimumGrossPerKm()), true);
         minLongHour = Ui.field(this, goalFields, "Corrida longa: mínimo bruto (R$/h)", number(preferences.minimumLongRidePerHour()), true);
-        costKm = Ui.field(this, goalFields, "Custo total (R$/km: combustível, manutenção e desgaste)", number(preferences.operatingCostPerKm()), true);
-        goalFields.addView(Ui.text(this, "Se o custo por km superar a régua, o custo prevalece. Confira esse valor no seu carro antes de usar a recomendação.", 13));
+        TextView costNote = Ui.text(this, "O custo por km (combustível + desgaste) fica em Gastos > Custos do carro. Se ele superar a régua, o custo prevalece.", 13);
+        costNote.setTextColor(Ui.MUTED);
+        goalFields.addView(costNote);
         desiredNet = Ui.field(this, goalFields, "Líquido desejado em particular (R$/h)", number(preferences.desiredNetPerHour()), true);
         weather = Ui.field(this, goalFields, "Clima atual (correção manual)", preferences.weather(), false);
 
@@ -65,6 +66,18 @@ public final class SettingsActivity extends Activity {
         Button addRisk = Ui.secondaryButton(this, "Marcar última localização");
         addRisk.setOnClickListener(v -> showRiskDialog());
         riskFields.addView(addRisk);
+        LinearLayout updateFields = Ui.disclosure(this, root, "Atualizações", "backup", false);
+        android.widget.CheckBox testChannel = new android.widget.CheckBox(this);
+        testChannel.setText("Receber versões de teste");
+        testChannel.setTextColor(Ui.NAVY);
+        testChannel.setTextSize(16);
+        testChannel.setMinHeight(Ui.dp(this, 56));
+        testChannel.setChecked(preferences.testChannel());
+        testChannel.setOnCheckedChangeListener((view, checked) -> preferences.setTestChannel(checked));
+        updateFields.addView(testChannel);
+        TextView channelNote = Ui.text(this, "Versões de teste chegam antes, mas podem ter falhas. Busque em Mais > Buscar atualizações.", 13);
+        channelNote.setTextColor(Ui.MUTED);
+        updateFields.addView(channelNote);
         Button folder = Ui.secondaryButton(this, "Pasta do backup");
         folder.setOnClickListener(v -> selectBackupFolder());
         Ui.buttonIcon(folder, "backup", Ui.MUTED);
@@ -85,7 +98,6 @@ public final class SettingsActivity extends Activity {
         preferences.setPlannedMinutes((int) Math.round(Math.min(12, Math.max(1, Ui.number(plannedHours, 10))) * 60));
         preferences.setMinimumGrossPerKm(Ui.number(minKm, 1.20));
         preferences.setMinimumLongRidePerHour(Ui.number(minLongHour, 35));
-        preferences.setOperatingCostPerKm(Ui.number(costKm, 1.50));
         preferences.setDesiredNetPerHour(Ui.number(desiredNet, 35));
         preferences.setWeather(weather.getText().toString().trim());
         preferences.setAiEndpoint(endpoint.getText().toString());

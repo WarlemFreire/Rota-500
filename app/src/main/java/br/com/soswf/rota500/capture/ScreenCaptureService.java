@@ -45,6 +45,7 @@ import br.com.soswf.rota500.core.OfferTextParser;
 import br.com.soswf.rota500.core.RuleDecision;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
+import br.com.soswf.rota500.data.CarCosts;
 import br.com.soswf.rota500.ui.MainActivity;
 
 public final class ScreenCaptureService extends Service {
@@ -311,7 +312,7 @@ public final class ScreenCaptureService extends Service {
         lastOfferSeenAt = now;
         String joined = String.join(" ", lines);
         OfferData offer = parser.parse(platformFor(joined), lines);
-        DecisionRules rules = preferences.decisionRules();
+        DecisionRules rules = CarCosts.load(database, preferences).decisionRules(preferences);
         boolean unsafe = database.isDestinationUnsafe(offer.destination);
         RuleDecision decision = ruleEngine.evaluate(offer, rules, unsafe);
         // Uma leitura parcial não deve virar uma orientação vaga. O quadro seguinte

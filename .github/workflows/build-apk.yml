@@ -1,12 +1,19 @@
 name: Gerar APK do Rota 500
 
+# main: versão estável publicada como Release quando o versionName muda (Q24).
+# Branches de trabalho: APK como artefato; com [publicar-teste] no commit, vira
+# versão de teste (pre-release) no botão de atualização (Q25, Q27, Q29).
 on:
   push:
-    branches: [main]
+    branches: [main, 'ccr-*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -27,13 +34,13 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Recuperar assinatura estável do APK
+      - name: Recuperar assinatura de depuração (só sem a chave fixa)
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: rota500-debug-keystore-v1
 
-      - name: Criar assinatura na primeira compilação
+      - name: Criar assinatura de depuração na primeira compilação
         run: |
           mkdir -p "$HOME/.android"
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
@@ -52,13 +59,78 @@ jobs:
       - name: Testar motor local
         run: ./run-core-tests.sh
 
-      - name: Compilar APK de teste
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Definir versão e canal
+        id: version
+        run: |
+          base=$(grep -oP 'baseVersionName = "\K[^"]+' app/build.gradle.kts)
+          code=${{ github.run_number }}
+          message=$(git log -1 --pretty=%B)
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            name="$base"; channel=stable
+          elif printf '%s' "$message" | grep -qF '[publicar-teste]'; then
+            name="$base-teste.$code"; channel=test
+          else
+            name="$base-dev.$code"; channel=none
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Versão $name (build $code), canal $channel" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compilar APK
+        id: apk
+        env:
+          ROTA500_KEYSTORE_PASSWORD: ${{ secrets.ROTA500_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$ROTA500_KEYSTORE_PASSWORD" ]; then
+            task=assembleRelease; built=app/build/outputs/apk/release/app-release.apk; signed=true
+          else
+            task=assembleDebug; built=app/build/outputs/apk/debug/app-debug.apk; signed=false
+            echo "Sem o Secret ROTA500_KEYSTORE_PASSWORD: APK assinado com chave de depuração, não será publicado." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          gradle --no-daemon ":app:$task" \
+            -ProtaVersionCode=${{ steps.version.outputs.code }} \
+            -ProtaVersionName=${{ steps.version.outputs.name }}
+          out="rota500-${{ steps.version.outputs.name }}-b${{ steps.version.outputs.code }}.apk"
+          cp "$built" "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+          echo "signed=$signed" >> "$GITHUB_OUTPUT"
 
       - name: Guardar APK por sete dias
         uses: actions/upload-artifact@v4
         with:
-          name: Rota500-apk-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Rota500-apk
+          path: ${{ steps.apk.outputs.file }}
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publicar versão
+        if: steps.version.outputs.channel != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.version.outputs.name }}
+          FILE: ${{ steps.apk.outputs.file }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
+          SIGNED: ${{ steps.apk.outputs.signed }}
+        run: |
+          if [ "$SIGNED" != "true" ]; then
+            echo "::warning::Versão $NAME não publicada: cadastre o Secret ROTA500_KEYSTORE_PASSWORD."
+            exit 0
+          fi
+          tag="v$NAME"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag já existe; nada a publicar." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$CHANNEL" = "test" ]; then
+            gh release create "$tag" "$FILE" --target "$GITHUB_SHA" --prerelease \
+              --title "$NAME" --notes "Versão de teste do Rota 500. Instale pelo botão Buscar atualizações."
+            # Q28: mantém só as 5 versões de teste mais recentes.
+            gh release list --limit 100 --json tagName,isPrerelease,createdAt \
+              --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+              while read -r old; do gh release delete "$old" --yes --cleanup-tag; done
+          else
+            gh release create "$tag" "$FILE" --target "$GITHUB_SHA" \
+              --title "$NAME" --notes "Versão estável do Rota 500."
+          fi
+          echo "Publicada: $tag" >> "$GITHUB_STEP_SUMMARY"

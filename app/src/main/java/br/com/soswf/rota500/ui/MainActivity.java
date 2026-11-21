@@ -34,14 +34,23 @@ import java.util.Locale;
 import br.com.soswf.rota500.ai.StrategyCoordinator;
 import br.com.soswf.rota500.backup.BackupManager;
 import br.com.soswf.rota500.capture.ScreenCaptureService;
+import br.com.soswf.rota500.core.JourneyWatch;
 import br.com.soswf.rota500.core.StrategyAdvice;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
 import br.com.soswf.rota500.data.DashboardStats;
 import br.com.soswf.rota500.data.FinancialToday;
 import br.com.soswf.rota500.location.TrackingService;
+import br.com.soswf.rota500.core.UpdatePicker;
+import br.com.soswf.rota500.update.UpdateManager;
 
 public final class MainActivity extends Activity {
+    /** Ações abertas a partir das notificações da jornada. */
+    public static final String EXTRA_OPEN = "br.com.soswf.rota500.OPEN";
+    public static final String OPEN_END = "END";
+    public static final String OPEN_REGISTER = "REGISTER";
+    public static final String OPEN_CONTINUE = "CONTINUE";
+    public static final String OPEN_REOPEN = "REOPEN";
     private static final int LOCATION_REQUEST = 20;
     private static final int NOTIFICATION_REQUEST = 21;
     private static final int BACKUP_FOLDER_REQUEST = 30;
@@ -57,7 +66,8 @@ public final class MainActivity extends Activity {
     private TextView hourValue;
     private TextView blockValue;
     private TextView activeTimeValue;
-    private TextView financialValue;
+    private TextView netValue;
+    private TextView cashValue;
     private TextView sourceDetails;
     private ProgressBar goalProgress;
     private LinearLayout decisionCard;
@@ -92,6 +102,66 @@ public final class MainActivity extends Activity {
         database = AppDatabase.get(this);
         preferences = new AppPreferences(this);
         buildUi();
+        handleOpenAction(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleOpenAction(intent);
+    }
+
+    private void handleOpenAction(Intent intent) {
+        if (intent == null) return;
+        if (UpdateManager.ACTION_INSTALL_STATUS.equals(intent.getAction())) {
+            handleInstallStatus(intent);
+            intent.setAction(null);
+            return;
+        }
+        String action = intent.getStringExtra(EXTRA_OPEN);
+        if (action == null) return;
+        intent.removeExtra(EXTRA_OPEN);
+        if (OPEN_REOPEN.equals(action)) {
+            long ended = preferences.autoEndedSession();
+            if (ended > 0 && database.reopenSession(ended)) {
+                preferences.setAutoEndedSession(0);
+                getSystemService(android.app.NotificationManager.class).cancel(504);
+                ensureTracking();
+                toast("Jornada reaberta.");
+                refresh();
+            } else toast("Não foi possível reabrir: já existe outra jornada ou ela não foi encontrada.");
+            return;
+        }
+        if (database.activeSessionId() <= 0) {
+            if (!OPEN_CONTINUE.equals(action)) toast("Nenhuma jornada aberta.");
+            return;
+        }
+        switch (action) {
+            case OPEN_END -> endShift();
+            case OPEN_REGISTER -> showSourceSheet();
+            case OPEN_CONTINUE -> {
+                ensureTracking();
+                toast("Jornada retomada. Ligue a leitura se precisar.");
+            }
+            default -> { }
+        }
+    }
+
+    /** Religa o GPS e a notificação da jornada (ex.: depois de reiniciar o celular, Q32). */
+    private void ensureTracking() {
+        if (database.activeSessionId() <= 0) return;
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+        try {
+            startForegroundService(new Intent(this, TrackingService.class).setAction(TrackingService.ACTION_START));
+        } catch (RuntimeException ignored) { }
+    }
+
+    /** Atualiza a notificação da jornada depois de uma mudança feita no app. */
+    private void notifyJourneyChanged() {
+        if (database.activeSessionId() <= 0) return;
+        try { startService(new Intent(this, TrackingService.class).setAction(TrackingService.ACTION_REFRESH)); }
+        catch (RuntimeException ignored) { }
     }
 
     @Override protected void onStart() {
@@ -115,6 +185,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        ensureTracking();
         refresh();
         maybeAskForContext();
         uiHandler.removeCallbacks(refreshClock);
@@ -196,22 +267,18 @@ public final class MainActivity extends Activity {
         decisionCard.addView(decisionDetails);
         root.addView(decisionCard);
 
+        // Q14, Q18: líquido estimado e dinheiro no bolso lado a lado, mesmo tamanho.
         LinearLayout financeCard = Ui.card(this);
-        financeCard.setOrientation(LinearLayout.HORIZONTAL);
-        financeCard.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        financeCard.setMinimumHeight(Ui.dp(this, 76));
         financeCard.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), Ui.dp(this, 8));
         financeCard.setBackground(Ui.ripple(this, Ui.CARD, 18));
         financeCard.setOnClickListener(v -> startActivity(new Intent(this, FinanceActivity.class)));
-        LinearLayout financeLabel = Ui.column(this);
-        financeLabel.addView(Ui.text(this, "Após gastos pagos", 14));
+        LinearLayout financeRow = new LinearLayout(this);
+        netValue = financeColumn(financeRow, "Líquido estimado");
+        cashValue = financeColumn(financeRow, "No bolso hoje");
+        financeCard.addView(financeRow);
         sourceDetails = Ui.text(this, "", 12);
         sourceDetails.setTextColor(Ui.MUTED);
-        financeLabel.addView(sourceDetails);
-        financeCard.addView(financeLabel, new LinearLayout.LayoutParams(0, -2, 1));
-        financialValue = Ui.number(this, "R$ 0", 24);
-        financeCard.addView(financialValue, new LinearLayout.LayoutParams(Ui.dp(this, 134), Ui.dp(this, 48)));
-        financialValue.setGravity(android.view.Gravity.END | android.view.Gravity.CENTER_VERTICAL);
+        financeCard.addView(sourceDetails);
         root.addView(financeCard);
 
         captureStatus = Ui.text(this, "", 12);
@@ -264,6 +331,17 @@ public final class MainActivity extends Activity {
         screen.addView(Ui.divider(this));
         screen.addView(bottomNavigation(scroll));
         Ui.install(this, screen);
+    }
+
+    private TextView financeColumn(LinearLayout row, String label) {
+        LinearLayout column = Ui.column(this);
+        TextView name = Ui.text(this, label, 13);
+        name.setTextColor(Ui.MUTED);
+        column.addView(name);
+        TextView value = Ui.number(this, "R$ 0", 24);
+        column.addView(value, new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
+        row.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
+        return value;
     }
 
     private TextView addMetric(LinearLayout row, String label, String initialValue, int accent) {
@@ -336,6 +414,61 @@ public final class MainActivity extends Activity {
         menuAction(body, dialog, "Ajustes", "settings", () -> startActivity(new Intent(this, SettingsActivity.class)));
         menuAction(body, dialog, "Salvar backup", "backup", this::backup);
         menuAction(body, dialog, "Restaurar backup", "undo", this::chooseRestoreFile);
+        menuAction(body, dialog, "Buscar atualizações", "backup", this::checkUpdates);
+    }
+
+    /** Q19-Q21: consulta as versões publicadas e instala a mais nova. */
+    private void checkUpdates() {
+        UpdateManager updates = new UpdateManager(this);
+        toast("Procurando atualizações…");
+        updates.check(preferences.testChannel(), check -> {
+            if (isFinishing()) return;
+            String current = "Instalada: " + check.installedName() + " (build " + check.installedCode() + ")";
+            if (check.state() != UpdateManager.State.AVAILABLE) {
+                new AlertDialog.Builder(this).setTitle("Atualizações")
+                        .setMessage(check.message() + "\n\n" + current
+                                + (preferences.testChannel() ? "\nCanal de teste ligado." : ""))
+                        .setPositiveButton("OK", null).show();
+                return;
+            }
+            UpdatePicker.Candidate candidate = check.candidate();
+            new AlertDialog.Builder(this).setTitle("Nova versão " + candidate.versionName())
+                    .setMessage(current + "\nNova: " + candidate.versionName() + " (build " + candidate.versionCode() + ")"
+                            + (candidate.prerelease() ? "\nVersão de teste." : "")
+                            + (preferences.backupTreeUri().isBlank() ? "\n\nSem pasta de backup configurada."
+                            : "\n\nUm backup será salvo antes."))
+                    .setPositiveButton("Atualizar", (d, w) -> installUpdate(updates, candidate))
+                    .setNegativeButton("Depois", null).show();
+        });
+    }
+
+    private void installUpdate(UpdateManager updates, UpdatePicker.Candidate candidate) {
+        if (!updates.canInstall()) {
+            new AlertDialog.Builder(this).setTitle("Permitir instalação")
+                    .setMessage("Libere \"Instalar apps desconhecidos\" para o Rota 500 e toque em Atualizar de novo.")
+                    .setPositiveButton("Abrir ajuste", (d, w) -> startActivity(updates.unknownSourcesSettings()))
+                    .setNegativeButton("Cancelar", null).show();
+            return;
+        }
+        updates.downloadAndInstall(candidate, new UpdateManager.InstallCallback() {
+            @Override public void onProgress(String message) { toast(message); }
+            @Override public void onError(String message) { toast(message); }
+        });
+    }
+
+    private void handleInstallStatus(Intent intent) {
+        int status = intent.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS,
+                android.content.pm.PackageInstaller.STATUS_FAILURE);
+        String message = UpdateManager.describeStatus(status,
+                intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE));
+        if (message != null) { toast(message); return; }
+        Intent confirm = Build.VERSION.SDK_INT >= 33
+                ? intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class)
+                : intent.getParcelableExtra(Intent.EXTRA_INTENT);
+        if (confirm != null) {
+            try { startActivity(confirm); }
+            catch (RuntimeException error) { toast("Não foi possível abrir o instalador."); }
+        }
     }
 
     private void showJourney() {
@@ -391,9 +524,35 @@ public final class MainActivity extends Activity {
         refresh();
     }
 
+    /** Q36: depois de 1 h ou mais sem ganho, pergunta quando a jornada realmente terminou. */
     private void endShift() {
+        long session = database.activeSessionId();
+        if (session <= 0) return;
+        long now = System.currentTimeMillis();
+        long start = database.activeSessionStart();
+        long lastGain = database.lastGainAt(session);
+        if (now - Math.max(start, lastGain) < JourneyWatch.ASK_END_TIME_AFTER_MS) {
+            finishShift(now);
+            return;
+        }
+        long presumed = JourneyWatch.presumedEnd(start, lastGain, database.lastMovementAt(session), now);
+        String label = lastGain > start ? "No último ganho" : "Quando o carro parou";
+        LinearLayout body = Ui.column(this);
+        android.app.Dialog dialog = Ui.sheet(this, "Quando você encerrou?", body);
+        TextView hint = Ui.text(this, "Encerrar no horário real evita contar tempo parado no seu R$/h.", 14);
+        hint.setTextColor(Ui.MUTED);
+        body.addView(hint);
+        menuAction(body, dialog, "Agora (" + clock(now) + ")", "clock", () -> finishShift(now));
+        menuAction(body, dialog, label + " (" + clock(presumed) + ")", "undo", () -> finishShift(presumed));
+    }
+
+    private String clock(long at) {
+        return DateFormat.getTimeInstance(DateFormat.SHORT, Locale.forLanguageTag("pt-BR")).format(new Date(at));
+    }
+
+    private void finishShift(long endAt) {
         DashboardStats stats = database.dashboardStats();
-        database.endActiveSession(stats.currentZone);
+        database.endActiveSession(stats.currentZone, endAt);
         startService(new Intent(this, TrackingService.class).setAction(TrackingService.ACTION_STOP));
         startService(new Intent(this, ScreenCaptureService.class).setAction(ScreenCaptureService.ACTION_STOP));
         preferences.setCaptureActive(false);
@@ -466,7 +625,7 @@ public final class MainActivity extends Activity {
             return;
         }
         LinearLayout choices = Ui.column(this);
-        FinancialToday day = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
+        FinancialToday day = database.financialToday(preferences);
         android.app.Dialog dialog = Ui.sheet(this, "Registrar ganho", choices);
         TextView hint = Ui.text(this, "Uber e 99: informe o total do dia. Particular: some uma corrida.", 14);
         hint.setTextColor(Ui.MUTED);
@@ -484,29 +643,53 @@ public final class MainActivity extends Activity {
                 : "Total acumulado da " + source + " hoje";
         NumberPad.show(this, prompt, 2, "", cents -> {
             if (cents <= 0 && "PARTICULAR".equals(source)) return;
-            try {
-                FinancialToday before = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
-                lastMoneyEventId = "PARTICULAR".equals(source)
-                        ? database.recordExtra(source, cents)
-                        : database.recordPlatformTotal(source, cents);
-                undoButton.setVisibility(View.VISIBLE);
-                uiHandler.removeCallbacks(hideUndo);
-                uiHandler.postDelayed(hideUndo, 8_000L);
-                refresh();
-                if (!"PARTICULAR".equals(source) && before.balance().legacyCents() > 0
-                        && before.balance().platformCents(source) == 0
-                        && database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm())
-                                .balance().totalCents() == before.balance().totalCents()) {
-                    toast("Primeiro total de " + source + " usado como base; saldo anterior preservado.");
-                }
-            } catch (RuntimeException error) { toast("Não foi possível registrar o valor."); }
+            if (!"PARTICULAR".equals(source) && database.platformMayHaveReset(source, cents)) {
+                // Mesma jornada, depois da meia-noite, total menor que o último antes da virada.
+                new AlertDialog.Builder(this).setTitle("O total da " + source + " zerou à meia-noite?")
+                        .setMessage("Sim: o app soma " + money(cents / 100.0) + " ao que você já tinha. "
+                                + "Não: o valor substitui o anterior (correção de digitação).")
+                        .setPositiveButton("Sim, zerou", (d, w) -> saveMoney(source, cents, true))
+                        .setNegativeButton("Não, corrigir", (d, w) -> saveMoney(source, cents, false))
+                        .show();
+                return;
+            }
+            saveMoney(source, cents, false);
         });
+    }
+
+    private void saveMoney(String source, long cents, boolean platformReset) {
+        try {
+            FinancialToday before = database.financialToday(preferences);
+            lastMoneyEventId = "PARTICULAR".equals(source)
+                    ? database.recordExtra(source, cents)
+                    : database.recordPlatformTotal(source, cents, platformReset);
+            notifyJourneyChanged();
+            undoButton.setVisibility(View.VISIBLE);
+            uiHandler.removeCallbacks(hideUndo);
+            uiHandler.postDelayed(hideUndo, 8_000L);
+            refresh();
+            if (!"PARTICULAR".equals(source) && before.balance().legacyCents() > 0
+                    && before.balance().platformCents(source) == 0
+                    && database.financialToday(preferences)
+                            .balance().totalCents() == before.balance().totalCents()) {
+                toast("Primeiro total de " + source + " usado como base; saldo anterior preservado.");
+            }
+        } catch (RuntimeException error) { toast("Não foi possível registrar o valor."); }
     }
 
     private void togglePause() {
         if (database.openPauseId() > 0) {
+            String reason = database.openPauseReason();
             database.closePause();
+            notifyJourneyChanged();
             refresh();
+            if ("Abastecer".equals(reason)) {
+                new AlertDialog.Builder(this).setTitle("Lançar o abastecimento?")
+                        .setMessage("Valor, litros e odômetro ajudam a calcular o custo real por km.")
+                        .setPositiveButton("Lançar", (d, w) -> startActivity(new Intent(this, FinanceActivity.class)
+                                .putExtra(FinanceActivity.EXTRA_REFUEL, true)))
+                        .setNegativeButton("Agora não", null).show();
+            }
             return;
         }
         if (database.activeSessionId() <= 0) return;
@@ -523,7 +706,12 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
                 params.setMargins(j == i ? 0 : Ui.dp(this, 8), Ui.dp(this, 4), 0, Ui.dp(this, 4));
                 row.addView(button, params);
-                button.setOnClickListener(v -> { database.openPause(reason); dialog.dismiss(); refresh(); });
+                button.setOnClickListener(v -> {
+                    database.openPause(reason);
+                    dialog.dismiss();
+                    notifyJourneyChanged();
+                    refresh();
+                });
             }
             content.addView(row);
         }
@@ -604,7 +792,7 @@ public final class MainActivity extends Activity {
 
     private void refreshMetricsOnly() {
         DashboardStats stats = database.dashboardStats();
-        FinancialToday day = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
+        FinancialToday day = database.financialToday(preferences);
         long activeMinutes = day.activeMinutes();
         double gross = day.balance().totalCents() / 100.0;
         double goal = preferences.dailyGoal();
@@ -617,9 +805,13 @@ public final class MainActivity extends Activity {
         blockValue.setText(day.blockGrossPerHourCents() == null ? "—" : moneyRounded(day.blockGrossPerHourCents()));
         hourValue.setText(day.dayGrossPerHourCents() == null ? "—" : moneyRounded(day.dayGrossPerHourCents()));
         activeTimeValue.setText(String.format(Locale.forLanguageTag("pt-BR"), "%d:%02d", activeMinutes / 60, activeMinutes % 60));
-        financialValue.setText(money(day.cashRemainderCents() / 100.0));
-        financialValue.setTextColor(day.cashRemainderCents() < 0 ? Ui.RED : Ui.NAVY);
-        sourceDetails.setText(money(day.cashSpentCents() / 100.0) + " em gastos hoje");
+        cashValue.setText(money(day.cashRemainderCents() / 100.0));
+        cashValue.setTextColor(day.cashRemainderCents() < 0 ? Ui.RED : Ui.NAVY);
+        netValue.setText(day.estimatedNetCents() == null ? "—" : money(day.estimatedNetCents() / 100.0));
+        netValue.setTextColor(day.estimatedNetCents() != null && day.estimatedNetCents() < 0 ? Ui.RED : Ui.GREEN);
+        sourceDetails.setText(money(day.cashSpentCents() / 100.0) + " em gastos pagos"
+                + (day.distanceKm() == null ? "" : String.format(Locale.forLanguageTag("pt-BR"), " · %.1f km %s",
+                day.distanceKm(), day.distanceFromGps() ? "pelo GPS" : "pelo odômetro")));
         if (stats.hasActiveSession()) {
             if (database.openPauseId() > 0) paceDetails.setText("Pausa em andamento · tempo ativo parado");
             else if (day.blockGrossPerHourCents() != null && day.dayGrossPerHourCents() != null

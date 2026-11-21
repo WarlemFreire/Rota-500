@@ -19,19 +19,32 @@ final class NumberPad {
 
     static void show(Context context, String question, int decimals, String unit,
             LongConsumer onSave) {
+        show(context, question, decimals, unit, 0, onSave);
+    }
+
+    /**
+     * decimals 2 sem unidade = dinheiro (centavos). Com unidade, o valor é exibido com as
+     * casas decimais pedidas (ex.: litros 2 casas → 4250 = 42,50 L). initial já vem escalado.
+     */
+    static void show(Context context, String question, int decimals, String unit, long initial,
+            LongConsumer onSave) {
         LinearLayout root = Ui.column(context);
         TextView amount = Ui.number(context, "", 46);
         amount.setGravity(Gravity.CENTER);
         amount.setTextColor(Ui.GREEN);
         root.addView(amount, new LinearLayout.LayoutParams(-1, Ui.dp(context, 72)));
-        TextView hint = Ui.text(context, decimals == 2 ? "Digite o valor com centavos, sem vírgula" : "Informe o valor inteiro", 12);
+        boolean money = decimals == 2 && unit.isEmpty();
+        TextView hint = Ui.text(context, money ? "Digite o valor com centavos, sem vírgula"
+                : decimals > 0 ? "Digite com " + decimals + " casas decimais, sem vírgula" : "Informe o valor inteiro", 12);
         hint.setTextColor(Ui.MUTED);
         hint.setGravity(Gravity.CENTER);
         root.addView(hint);
-        final long[] digits = {0};
+        final long[] digits = {Math.max(0, initial)};
         Runnable render = () -> {
-            if (decimals == 2) amount.setText(String.format(Locale.forLanguageTag("pt-BR"),
+            if (money) amount.setText(String.format(Locale.forLanguageTag("pt-BR"),
                     "R$ %.2f", digits[0] / 100.0));
+            else if (decimals > 0) amount.setText(String.format(Locale.forLanguageTag("pt-BR"),
+                    "%." + decimals + "f %s", digits[0] / Math.pow(10, decimals), unit));
             else amount.setText(String.format(Locale.forLanguageTag("pt-BR"), "%,d %s", digits[0], unit));
         };
         render.run();

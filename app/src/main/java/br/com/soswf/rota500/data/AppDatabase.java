@@ -22,26 +22,93 @@ import br.com.soswf.rota500.core.RuleDecision;
 import br.com.soswf.rota500.core.StrategyAdvice;
 import br.com.soswf.rota500.core.MoneyLedger;
 import br.com.soswf.rota500.core.WorkMath;
+import br.com.soswf.rota500.core.FuelMath;
+import br.com.soswf.rota500.core.GpsDistance;
 
 public final class AppDatabase extends SQLiteOpenHelper {
     private static final String NAME = "rota500.db";
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
+    private static final String BACKUP_FORMAT = "rota500-backup-v3";
     private static final String[] BACKUP_TABLES = {"work_sessions", "offers", "location_points",
             "gross_snapshots", "private_quotes", "risk_zones", "strategy_events",
             "dynamic_observations", "learning_buckets", "money_events", "expenses", "work_pauses", "odometer_entries"};
     private static final int LEGACY_BACKUP_TABLES = 9;
+    private static final String PREFS = "rota500_database";
+    private static final String REPROCESS_PENDING = "journey_days_reprocess_pending";
     private static volatile AppDatabase instance;
+    private final Context context;
+    /** Só reprocessa o histórico se a cópia de segurança do banco anterior deu certo (Q16). */
+    private final boolean upgradeCopyOk;
 
     public static AppDatabase get(Context context) {
         if (instance == null) {
             synchronized (AppDatabase.class) {
-                if (instance == null) instance = new AppDatabase(context.getApplicationContext());
+                if (instance == null) {
+                    Context app = context.getApplicationContext();
+                    boolean copied = copyBeforeUpgrade(app);
+                    AppDatabase created = new AppDatabase(app, copied);
+                    created.finishPendingReprocess();
+                    instance = created;
+                }
             }
         }
         return instance;
     }
 
-    private AppDatabase(Context context) { super(context, NAME, null, VERSION); }
+    private AppDatabase(Context context, boolean upgradeCopyOk) {
+        super(context, NAME, null, VERSION);
+        this.context = context;
+        this.upgradeCopyOk = upgradeCopyOk;
+    }
+
+    /** Copia o arquivo do banco quando ele ainda está numa versão anterior à 5. */
+    private static boolean copyBeforeUpgrade(Context context) {
+        java.io.File file = context.getDatabasePath(NAME);
+        if (!file.exists()) return true;
+        try {
+            int version;
+            try (SQLiteDatabase old = SQLiteDatabase.openDatabase(file.getPath(), null, SQLiteDatabase.OPEN_READONLY)) {
+                version = old.getVersion();
+            }
+            if (version >= VERSION) return true;
+            return copyDatabaseFile(context, "antes-v" + VERSION);
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
+    private static boolean copyDatabaseFile(Context context, String label) {
+        java.io.File file = context.getDatabasePath(NAME);
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT)
+                .format(new java.util.Date());
+        try {
+            for (String suffix : new String[]{"", "-journal", "-wal", "-shm"}) {
+                java.io.File source = new java.io.File(file.getPath() + suffix);
+                if (!source.exists()) continue;
+                java.io.File target = new java.io.File(file.getParentFile(),
+                        "rota500-copia-" + label + "-" + stamp + ".db" + suffix);
+                java.nio.file.Files.copy(source.toPath(), target.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                if (target.length() != source.length()) return false;
+            }
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private void finishPendingReprocess() {
+        android.content.SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        SQLiteDatabase db = getWritableDatabase();
+        if (!prefs.getBoolean(REPROCESS_PENDING, false)) return;
+        if (!copyDatabaseFile(context, "antes-reprocessar")) return;
+        db.beginTransaction();
+        try {
+            reprocessJourneyDays(db);
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+        prefs.edit().putBoolean(REPROCESS_PENDING, false).apply();
+    }
 
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE work_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, start_at INTEGER NOT NULL, end_at INTEGER, gross_cents INTEGER NOT NULL DEFAULT 0, start_zone TEXT, end_zone TEXT, learned INTEGER NOT NULL DEFAULT 0)");
@@ -54,6 +121,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE learning_buckets (bucket_key TEXT PRIMARY KEY, samples INTEGER NOT NULL, expected_gross_hour REAL NOT NULL, updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE gross_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, captured_at INTEGER NOT NULL, gross_cents INTEGER NOT NULL)");
         createFinanceTables(db);
+        applyV5Schema(db);
         for (String name : new String[]{"Buraco do Boi", "Bacia", "Caixa d'Água", "Forte", "Geneciano"}) {
             ContentValues values = new ContentValues();
             values.put("name", name);
@@ -67,6 +135,70 @@ public final class AppDatabase extends SQLiteOpenHelper {
         if (oldVersion < 4) {
             createFinanceTables(db);
             migrateOldGross(db);
+        }
+        if (oldVersion < 5) {
+            applyV5Schema(db);
+            if (upgradeCopyOk) reprocessJourneyDays(db);
+            else context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putBoolean(REPROCESS_PENDING, true).commit();
+        }
+    }
+
+    /** Colunas da 0.9: dia da jornada, tanque cheio e vínculo da corrida particular com o ganho. */
+    private void applyV5Schema(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE work_sessions ADD COLUMN day_key INTEGER");
+        db.execSQL("ALTER TABLE expenses ADD COLUMN full_tank INTEGER NOT NULL DEFAULT 0");
+        db.execSQL("ALTER TABLE private_quotes ADD COLUMN money_event_id INTEGER");
+        db.execSQL("ALTER TABLE private_quotes ADD COLUMN received_cents INTEGER");
+        db.execSQL("CREATE INDEX IF NOT EXISTS work_sessions_day ON work_sessions(day_key)");
+    }
+
+    /**
+     * Dia = jornada (Q5, Q15): tudo que pertence a uma jornada passa para o dia em que ela
+     * começou. Totais de plataforma lançados depois da virada de data são rebaseados para
+     * não substituir o total do dia anterior quando a plataforma zerou.
+     */
+    private void reprocessJourneyDays(SQLiteDatabase db) {
+        try (Cursor cursor = db.rawQuery("SELECT id,start_at FROM work_sessions", null)) {
+            while (cursor.moveToNext()) {
+                ContentValues values = new ContentValues();
+                values.put("day_key", dayKey(cursor.getLong(1)));
+                db.update("work_sessions", values, "id=?", new String[]{Long.toString(cursor.getLong(0))});
+            }
+        }
+        String fromSession = "(SELECT day_key FROM work_sessions s WHERE s.id=%s.session_id)";
+        String hasSession = "session_id IN (SELECT id FROM work_sessions)";
+        db.execSQL("UPDATE money_events SET day_key=" + String.format(fromSession, "money_events") + " WHERE " + hasSession);
+        db.execSQL("UPDATE expenses SET day_key=" + String.format(fromSession, "expenses") + " WHERE " + hasSession);
+        db.execSQL("UPDATE odometer_entries SET day_key=" + String.format(fromSession, "odometer_entries") + " WHERE " + hasSession);
+        List<long[]> groups = new ArrayList<>();
+        List<String> sources = new ArrayList<>();
+        try (Cursor cursor = db.rawQuery("SELECT DISTINCT day_key,source FROM money_events WHERE kind='PLATFORM'", null)) {
+            while (cursor.moveToNext()) { groups.add(new long[]{cursor.getLong(0)}); sources.add(cursor.getString(1)); }
+        }
+        for (int g = 0; g < groups.size(); g++) {
+            List<Long> ids = new ArrayList<>();
+            List<MoneyLedger.Reading> readings = new ArrayList<>();
+            long firstBaseline = 0;
+            int previousCalendarDay = 0;
+            try (Cursor cursor = db.rawQuery("SELECT id,occurred_at,amount_cents,baseline_cents FROM money_events "
+                            + "WHERE day_key=? AND source=? AND kind='PLATFORM' AND voided=0 ORDER BY occurred_at,id",
+                    new String[]{Long.toString(groups.get(g)[0]), sources.get(g)})) {
+                while (cursor.moveToNext()) {
+                    int calendarDay = dayKey(cursor.getLong(1));
+                    if (ids.isEmpty()) firstBaseline = cursor.getLong(3);
+                    readings.add(new MoneyLedger.Reading(cursor.getLong(2),
+                            !ids.isEmpty() && calendarDay != previousCalendarDay));
+                    ids.add(cursor.getLong(0));
+                    previousCalendarDay = calendarDay;
+                }
+            }
+            long[] baselines = MoneyLedger.rebasedBaselines(readings, firstBaseline);
+            for (int i = 0; i < ids.size(); i++) {
+                ContentValues values = new ContentValues();
+                values.put("baseline_cents", baselines[i]);
+                db.update("money_events", values, "id=?", new String[]{Long.toString(ids.get(i))});
+            }
         }
     }
 
@@ -98,24 +230,38 @@ public final class AppDatabase extends SQLiteOpenHelper {
     public synchronized long beginSession(String startZone) {
         long active = activeSessionId();
         if (active > 0) return active;
+        long now = System.currentTimeMillis();
         ContentValues values = new ContentValues();
-        values.put("start_at", System.currentTimeMillis());
+        values.put("start_at", now);
         values.put("start_zone", startZone);
+        values.put("day_key", dayKey(now));
         long id = getWritableDatabase().insertOrThrow("work_sessions", null, values);
-        insertGrossSnapshot(id, 0, System.currentTimeMillis());
+        insertGrossSnapshot(id, 0, now);
         return id;
     }
 
     public synchronized void endActiveSession(String endZone) {
+        endActiveSession(endZone, System.currentTimeMillis());
+    }
+
+    /** Encerra no horário informado (último ganho, início da pausa…), nunca antes do início. */
+    public synchronized void endActiveSession(String endZone, long requestedEnd) {
         DashboardStats stats = dashboardStats();
         if (!stats.hasActiveSession()) return;
-        closePause();
-        long now = System.currentTimeMillis();
+        long now = Math.max(stats.startedAt, Math.min(System.currentTimeMillis(), requestedEnd));
+        closePauseAt(now);
+        // Pausas que começariam depois do fim escolhido deixam de existir.
+        getWritableDatabase().delete("work_pauses", "session_id=? AND start_at>?",
+                new String[]{Long.toString(stats.sessionId), Long.toString(now)});
+        ContentValues ended = new ContentValues();
+        ended.put("end_at", now);
+        getWritableDatabase().update("work_pauses", ended, "session_id=? AND end_at>?",
+                new String[]{Long.toString(stats.sessionId), Long.toString(now)});
         ContentValues values = new ContentValues();
         values.put("end_at", now);
         values.put("end_zone", endZone);
         getWritableDatabase().update("work_sessions", values, "id=?", new String[]{Long.toString(stats.sessionId)});
-        long active = activeMillis(stats.startedAt, now, now);
+        long active = sessionActiveMillis(stats.sessionId, stats.startedAt, now, now);
         int minutes = (int) (active / 60_000L);
         int sources = scalarInt("SELECT COUNT(DISTINCT source) FROM money_events "
                         + "WHERE session_id=? AND kind='PLATFORM' AND voided=0",
@@ -136,6 +282,55 @@ public final class AppDatabase extends SQLiteOpenHelper {
                 "SELECT id FROM work_sessions WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null)) {
             return cursor.moveToFirst() ? cursor.getLong(0) : 0;
         }
+    }
+
+    /** Reabre uma jornada encerrada por inatividade (Q37), se não houver outra aberta. */
+    public synchronized boolean reopenSession(long sessionId) {
+        if (activeSessionId() > 0) return false;
+        ContentValues values = new ContentValues();
+        values.putNull("end_at");
+        values.putNull("end_zone");
+        return getWritableDatabase().update("work_sessions", values, "id=?",
+                new String[]{Long.toString(sessionId)}) > 0;
+    }
+
+    public long activeSessionStart() {
+        return scalarLong("SELECT COALESCE(start_at,0) FROM work_sessions WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null);
+    }
+
+    /** Dia da jornada ativa; sem jornada, a data do calendário (Q5, Q7). */
+    public int currentDayKey() {
+        long active = scalarLong("SELECT COALESCE(day_key,0) FROM work_sessions WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null);
+        return active > 0 ? (int) active : dayKey(System.currentTimeMillis());
+    }
+
+    /** Último ganho válido lançado na jornada (0 se nenhum). */
+    public long lastGainAt(long sessionId) {
+        return scalarLong("SELECT COALESCE(MAX(occurred_at),0) FROM money_events WHERE session_id=? AND voided=0 "
+                + "AND kind IN ('PLATFORM','EXTRA')", new String[]{Long.toString(sessionId)});
+    }
+
+    public long lastMovementAt(long sessionId) {
+        return GpsDistance.lastMovementAt(sessionPoints(List.of(sessionId)));
+    }
+
+    public long openPauseStart() {
+        return scalarLong("SELECT COALESCE(start_at,0) FROM work_pauses WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null);
+    }
+
+    public long lastPauseEnd(long sessionId) {
+        return scalarLong("SELECT COALESCE(MAX(end_at),0) FROM work_pauses WHERE session_id=? AND end_at IS NOT NULL",
+                new String[]{Long.toString(sessionId)});
+    }
+
+    /** Tempo ativo (sem pausas) da jornada entre from e until. */
+    public long sessionActiveMillis(long sessionId, long from, long until, long now) {
+        List<WorkMath.Span> sessions = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT start_at,end_at FROM work_sessions WHERE id=?",
+                new String[]{Long.toString(sessionId)})) {
+            if (cursor.moveToFirst()) sessions.add(new WorkMath.Span(cursor.getLong(0), cursor.isNull(1) ? now : cursor.getLong(1)));
+        }
+        return WorkMath.activeMillis(from, until, sessions, pauses(List.of(sessionId), now));
     }
 
     public void setActiveGrossCents(long cents) {
@@ -160,21 +355,43 @@ public final class AppDatabase extends SQLiteOpenHelper {
         }
     }
 
+    /**
+     * Depois da meia-noite, na mesma jornada, um total menor que o último lançado antes da
+     * virada pode ser a plataforma zerando o dia. O motorista confirma (Q6 da jornada).
+     */
+    public boolean platformMayHaveReset(String platform, long cents) {
+        long session = activeSessionId();
+        if (session <= 0) return false;
+        int day = currentDayKey();
+        int today = dayKey(System.currentTimeMillis());
+        if (day == today) return false;
+        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT occurred_at,amount_cents FROM money_events "
+                        + "WHERE day_key=? AND source=? AND kind='PLATFORM' AND voided=0 ORDER BY occurred_at DESC,id DESC LIMIT 1",
+                new String[]{Integer.toString(day), platform})) {
+            return cursor.moveToFirst() && dayKey(cursor.getLong(0)) != today && cents < cursor.getLong(1);
+        }
+    }
+
     public synchronized long recordPlatformTotal(String platform, long cents) {
+        return recordPlatformTotal(platform, cents, false);
+    }
+
+    public synchronized long recordPlatformTotal(String platform, long cents, boolean platformReset) {
         if (!"UBER".equals(platform) && !"99".equals(platform)) throw new IllegalArgumentException("Plataforma inválida");
         if (cents < 0) throw new IllegalArgumentException("Valor inválido");
         long session = activeSessionId();
         if (session <= 0) throw new IllegalStateException("Inicie uma jornada");
         long now = System.currentTimeMillis();
-        int day = dayKey(now);
+        int day = currentDayKey();
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
             long before = ledger(day).totalCents();
             long baseline;
-            try (Cursor cursor = db.rawQuery("SELECT baseline_cents FROM money_events WHERE day_key=? AND source=? AND kind='PLATFORM' AND voided=0 ORDER BY id LIMIT 1",
+            try (Cursor cursor = db.rawQuery("SELECT baseline_cents,amount_cents FROM money_events WHERE day_key=? AND source=? AND kind='PLATFORM' AND voided=0 ORDER BY occurred_at DESC,id DESC LIMIT 1",
                     new String[]{Integer.toString(day), platform})) {
-                if (cursor.moveToFirst()) baseline = cursor.getLong(0);
+                if (cursor.moveToFirst()) baseline = platformReset
+                        ? MoneyLedger.baselineAfterReset(cursor.getLong(0), cursor.getLong(1)) : cursor.getLong(0);
                 else baseline = scalarLong("SELECT COUNT(*) FROM money_events WHERE day_key=? AND kind='LEGACY'",
                         new String[]{Integer.toString(day)}) > 0 ? cents : 0;
             }
@@ -196,7 +413,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
         db.beginTransaction();
         try {
             long id = db.insertOrThrow("money_events", null,
-                    moneyValues(now, dayKey(now), session, "EXTRA", source, cents));
+                    moneyValues(now, currentDayKey(), session, "EXTRA", source, cents));
             applySessionDelta(session, cents, now);
             db.setTransactionSuccessful();
             return id;
@@ -206,7 +423,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
     public synchronized void undoMoney(long eventId) {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
-        try (Cursor cursor = db.rawQuery("SELECT day_key,session_id FROM money_events WHERE id=? AND voided=0 AND kind!='LEGACY'",
+        try (Cursor cursor = db.rawQuery("SELECT day_key,COALESCE(session_id,0) FROM money_events WHERE id=? AND voided=0 AND kind!='LEGACY'",
                 new String[]{Long.toString(eventId)})) {
             if (!cursor.moveToFirst()) return;
             int day = cursor.getInt(0);
@@ -215,7 +432,41 @@ public final class AppDatabase extends SQLiteOpenHelper {
             ContentValues value = new ContentValues();
             value.put("voided", 1);
             db.update("money_events", value, "id=?", new String[]{Long.toString(eventId)});
-            applySessionDelta(session, ledger(day).totalCents() - before, System.currentTimeMillis());
+            if (session > 0) applySessionDelta(session, ledger(day).totalCents() - before, System.currentTimeMillis());
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    /**
+     * Corrida particular concluída vira ganho no dia da marcação, com ou sem jornada (Q3).
+     * Sair de CONCLUÍDA anula o lançamento (Q4).
+     */
+    public synchronized void setPrivateRideStatus(long quoteId, String status, long receivedCents) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            long eventId = scalarLong("SELECT COALESCE(money_event_id,0) FROM private_quotes WHERE id=?",
+                    new String[]{Long.toString(quoteId)});
+            if (eventId > 0) {
+                undoMoney(eventId);
+                ContentValues clear = new ContentValues();
+                clear.putNull("money_event_id");
+                clear.putNull("received_cents");
+                db.update("private_quotes", clear, "id=?", new String[]{Long.toString(quoteId)});
+            }
+            ContentValues values = new ContentValues();
+            values.put("status", status);
+            if ("CONCLUÍDA".equals(status) && receivedCents > 0) {
+                long now = System.currentTimeMillis();
+                long session = activeSessionId();
+                ContentValues money = moneyValues(now, currentDayKey(), session, "EXTRA", "PARTICULAR", receivedCents);
+                if (session <= 0) money.putNull("session_id");
+                long id = db.insertOrThrow("money_events", null, money);
+                if (session > 0) applySessionDelta(session, receivedCents, now);
+                values.put("money_event_id", id);
+                values.put("received_cents", receivedCents);
+            }
+            db.update("private_quotes", values, "id=?", new String[]{Long.toString(quoteId)});
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
     }
@@ -227,11 +478,64 @@ public final class AppDatabase extends SQLiteOpenHelper {
         long now = System.currentTimeMillis();
         ContentValues values = new ContentValues();
         values.put("occurred_at", now);
-        values.put("day_key", dayKey(now));
+        values.put("day_key", currentDayKey());
         values.put("session_id", activeSessionId());
         values.put("category", category);
         values.put("amount_cents", cents);
         return getWritableDatabase().insertOrThrow("expenses", null, values);
+    }
+
+    /** Abastecimento completo. O odômetro também vale como leitura do dia (Q11). */
+    public synchronized long recordRefuel(long cents, double liters, double odometerKm, boolean fullTank) {
+        if (cents <= 0) throw new IllegalArgumentException("Valor inválido");
+        if (!(liters > 0) || liters > 200) throw new IllegalArgumentException("Litros inválidos");
+        if (!Double.isFinite(odometerKm) || odometerKm <= 0 || odometerKm > 9_999_999) throw new IllegalArgumentException("Odômetro inválido");
+        long now = System.currentTimeMillis();
+        long session = activeSessionId();
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            ContentValues values = new ContentValues();
+            values.put("occurred_at", now);
+            values.put("day_key", currentDayKey());
+            values.put("session_id", session);
+            values.put("category", "COMBUSTIVEL");
+            values.put("amount_cents", cents);
+            values.put("quantity", liters);
+            values.put("odometer_km", odometerKm);
+            values.put("full_tank", fullTank ? 1 : 0);
+            long id = db.insertOrThrow("expenses", null, values);
+            if (session > 0) recordOdometer(odometerKm);
+            db.setTransactionSuccessful();
+            return id;
+        } finally { db.endTransaction(); }
+    }
+
+    /** Desfaz o abastecimento e a leitura de odômetro que ele criou. */
+    public synchronized void undoRefuel(long expenseId) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try (Cursor cursor = db.rawQuery("SELECT occurred_at,odometer_km,COALESCE(session_id,0) FROM expenses WHERE id=? AND voided=0",
+                new String[]{Long.toString(expenseId)})) {
+            if (!cursor.moveToFirst()) return;
+            if (!cursor.isNull(1) && cursor.getLong(2) > 0) {
+                db.delete("odometer_entries", "session_id=? AND occurred_at=? AND km=?", new String[]{
+                        Long.toString(cursor.getLong(2)), Long.toString(cursor.getLong(0)), Double.toString(cursor.getDouble(1))});
+            }
+            undoExpense(expenseId);
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    public List<FuelMath.Refuel> refuels() {
+        List<FuelMath.Refuel> result = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT occurred_at,amount_cents,COALESCE(quantity,0),"
+                + "COALESCE(odometer_km,0),full_tank FROM expenses WHERE category='COMBUSTIVEL' AND voided=0 "
+                + "AND odometer_km IS NOT NULL ORDER BY occurred_at,id", null)) {
+            while (cursor.moveToNext()) result.add(new FuelMath.Refuel(cursor.getLong(0), cursor.getLong(1),
+                    cursor.getDouble(2), cursor.getDouble(3), cursor.getInt(4) != 0));
+        }
+        return result;
     }
 
     public void undoExpense(long id) {
@@ -254,12 +558,22 @@ public final class AppDatabase extends SQLiteOpenHelper {
         return scalarLong("SELECT COALESCE(id,0) FROM work_pauses WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null);
     }
 
-    public void closePause() {
+    public void closePause() { closePauseAt(System.currentTimeMillis()); }
+
+    private void closePauseAt(long at) {
         long id = openPauseId();
         if (id <= 0) return;
+        long start = openPauseStart();
         ContentValues values = new ContentValues();
-        values.put("end_at", System.currentTimeMillis());
+        values.put("end_at", Math.max(start, at));
         getWritableDatabase().update("work_pauses", values, "id=?", new String[]{Long.toString(id)});
+    }
+
+    public String openPauseReason() {
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT reason FROM work_pauses WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null)) {
+            return cursor.moveToFirst() ? cursor.getString(0) : "";
+        }
     }
 
     public long recordOdometer(double km) {
@@ -270,7 +584,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
         ContentValues values = new ContentValues();
         values.put("session_id", session);
         values.put("occurred_at", now);
-        values.put("day_key", dayKey(now));
+        values.put("day_key", currentDayKey());
         values.put("km", km);
         return getWritableDatabase().insertOrThrow("odometer_entries", null, values);
     }
@@ -279,10 +593,25 @@ public final class AppDatabase extends SQLiteOpenHelper {
         getWritableDatabase().delete("odometer_entries", "id=?", new String[]{Long.toString(id)});
     }
 
+    /** Resultado do dia com o custo por km vigente (combustível real ou temporário + desgaste). */
+    public FinancialToday financialToday(AppPreferences preferences) {
+        CarCosts costs = CarCosts.load(this, preferences);
+        return financialToday(costs.fuelPerKm, costs.wearPerKm);
+    }
+
+    /** Resultado do dia da jornada (Q5). fuelRate e wearRate em R$/km. */
     public FinancialToday financialToday(double fuelRate, double wearRate) {
         long now = System.currentTimeMillis();
-        long start = dayStart(now);
-        int day = dayKey(now);
+        int day = currentDayKey();
+        List<Long> sessionIds = new ArrayList<>();
+        long start = now;
+        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT id,start_at FROM work_sessions WHERE day_key=? ORDER BY start_at",
+                new String[]{Integer.toString(day)})) {
+            while (cursor.moveToNext()) {
+                sessionIds.add(cursor.getLong(0));
+                start = Math.min(start, cursor.getLong(1));
+            }
+        }
         List<MoneyLedger.Entry> events = moneyEntries(day);
         MoneyLedger.Balance balance = MoneyLedger.at(events, now);
         long fuel = 0, food = 0, maintenance = 0, financing = 0, other = 0;
@@ -299,11 +628,12 @@ public final class AppDatabase extends SQLiteOpenHelper {
                 }
             }
         }
-        long active = activeMillis(start, now, now);
+        long active = activeMillis(sessionIds, Long.MIN_VALUE, now, now);
         long windowStart = Math.max(start, now - 7_200_000L);
-        long blockActive = activeMillis(windowStart, now, now);
+        long blockActive = activeMillis(sessionIds, windowStart, now, now);
         Long dayRate = active >= 30 * 60_000L ? balance.totalCents() * 3_600_000L / active : null;
-        boolean baselineAvailable = windowStart == start || events.stream().anyMatch(e -> !e.voided() && e.at() <= windowStart);
+        final long firstStart = start;
+        boolean baselineAvailable = windowStart <= firstStart || events.stream().anyMatch(e -> !e.voided() && e.at() <= windowStart);
         boolean legacyInWindow = events.stream().anyMatch(e -> !e.voided() && "LEGACY".equals(e.kind()) && e.at() > windowStart);
         long blockCents = balance.totalCents() - MoneyLedger.at(events, windowStart).totalCents();
         Long blockRate = blockActive >= 30 * 60_000L && baselineAvailable && !legacyInWindow
@@ -314,30 +644,59 @@ public final class AppDatabase extends SQLiteOpenHelper {
                 new String[]{Integer.toString(day)})) {
             while (cursor.moveToNext()) points.add(new WorkMath.Odometer(cursor.getLong(0), cursor.getDouble(1)));
         }
-        Double km = WorkMath.odometerKm(points);
-        Long estimated = km != null && fuelRate > 0 && wearRate > 0 ? Math.round(balance.totalCents()
-                - (fuelRate + Math.max(0, wearRate)) * km * 100 - food - other) : null;
+        Double odometer = WorkMath.odometerKm(points);
+        // Q2: GPS por padrão; o odômetro prevalece quando houver duas leituras válidas.
+        boolean gps = odometer == null;
+        Double km = gps ? (sessionIds.isEmpty() ? null : GpsDistance.km(sessionPoints(sessionIds), pauses(sessionIds, now)))
+                : odometer;
+        Long estimated = km != null ? Math.round(balance.totalCents()
+                - (Math.max(0, fuelRate) + Math.max(0, wearRate)) * km * 100 - food - other) : null;
         return new FinancialToday(balance, fuel + food + maintenance + financing + other,
                 fuel, food, maintenance, financing, other, active / 60_000L,
-                blockRate, dayRate, km, estimated);
+                blockRate, dayRate, km, estimated, gps);
     }
 
-    private long activeMillis(long from, long until, long now) {
+    /** Tempo ativo das jornadas informadas, recortado em [from, until]. */
+    private long activeMillis(List<Long> sessionIds, long from, long until, long now) {
+        if (sessionIds.isEmpty()) return 0;
         List<WorkMath.Span> sessions = new ArrayList<>();
-        List<WorkMath.Span> pauses = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT start_at,end_at FROM work_sessions WHERE start_at<? AND (end_at IS NULL OR end_at>?)",
-                new String[]{Long.toString(until), Long.toString(from)})) {
+                "SELECT start_at,end_at FROM work_sessions WHERE id IN (" + ids(sessionIds) + ")", null)) {
             while (cursor.moveToNext()) sessions.add(new WorkMath.Span(cursor.getLong(0),
                     cursor.isNull(1) ? now : cursor.getLong(1)));
         }
+        return WorkMath.activeMillis(from, until, sessions, pauses(sessionIds, now));
+    }
+
+    private List<WorkMath.Span> pauses(List<Long> sessionIds, long now) {
+        List<WorkMath.Span> pauses = new ArrayList<>();
+        if (sessionIds.isEmpty()) return pauses;
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT start_at,end_at FROM work_pauses WHERE start_at<? AND (end_at IS NULL OR end_at>?)",
-                new String[]{Long.toString(until), Long.toString(from)})) {
+                "SELECT start_at,end_at FROM work_pauses WHERE session_id IN (" + ids(sessionIds) + ")", null)) {
             while (cursor.moveToNext()) pauses.add(new WorkMath.Span(cursor.getLong(0),
                     cursor.isNull(1) ? now : cursor.getLong(1)));
         }
-        return WorkMath.activeMillis(from, until, sessions, pauses);
+        return pauses;
+    }
+
+    private List<GpsDistance.Point> sessionPoints(List<Long> sessionIds) {
+        List<GpsDistance.Point> points = new ArrayList<>();
+        if (sessionIds.isEmpty()) return points;
+        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT captured_at,latitude,longitude,COALESCE(accuracy,-1) "
+                + "FROM location_points WHERE session_id IN (" + ids(sessionIds) + ") ORDER BY captured_at,id", null)) {
+            while (cursor.moveToNext()) points.add(new GpsDistance.Point(cursor.getLong(0), cursor.getDouble(1),
+                    cursor.getDouble(2), cursor.getDouble(3)));
+        }
+        return points;
+    }
+
+    private static String ids(List<Long> values) {
+        StringBuilder builder = new StringBuilder();
+        for (Long value : values) {
+            if (builder.length() > 0) builder.append(',');
+            builder.append(value.longValue());
+        }
+        return builder.toString();
     }
 
     private MoneyLedger.Balance ledger(int day) {
@@ -374,16 +733,6 @@ public final class AppDatabase extends SQLiteOpenHelper {
         values.put("gross_cents", Math.max(0, previous + delta));
         getWritableDatabase().update("work_sessions", values, "id=?", new String[]{Long.toString(session)});
         insertGrossSnapshot(session, Math.max(0, previous + delta), now);
-    }
-
-    private static long dayStart(long at) {
-        Calendar day = Calendar.getInstance();
-        day.setTimeInMillis(at);
-        day.set(Calendar.HOUR_OF_DAY, 0);
-        day.set(Calendar.MINUTE, 0);
-        day.set(Calendar.SECOND, 0);
-        day.set(Calendar.MILLISECOND, 0);
-        return day.getTimeInMillis();
     }
 
     private static int dayKey(long at) {
@@ -451,22 +800,17 @@ public final class AppDatabase extends SQLiteOpenHelper {
     public List<PrivateRideRecord> recentPrivateRides() {
         List<PrivateRideRecord> result = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT id,client_name,phone,scheduled_at,origin,destination,result_json,status FROM private_quotes ORDER BY created_at DESC LIMIT 50", null)) {
+                "SELECT id,client_name,phone,scheduled_at,origin,destination,result_json,status,COALESCE(received_cents,0) FROM private_quotes ORDER BY created_at DESC LIMIT 50", null)) {
             while (cursor.moveToNext()) {
                 double price = 0;
                 try { price = new JSONObject(cursor.getString(6)).optDouble("recommended_price", 0); }
                 catch (Exception ignored) { }
                 result.add(new PrivateRideRecord(cursor.getLong(0), cursor.getString(1), cursor.getString(2),
-                        cursor.getString(3), cursor.getString(4), cursor.getString(5), price, cursor.getString(7)));
+                        cursor.getString(3), cursor.getString(4), cursor.getString(5), price, cursor.getString(7),
+                        cursor.getLong(8)));
             }
         }
         return result;
-    }
-
-    public void updatePrivateRideStatus(long id, String status) {
-        ContentValues values = new ContentValues();
-        values.put("status", status);
-        getWritableDatabase().update("private_quotes", values, "id=?", new String[]{Long.toString(id)});
     }
 
     public String clientReliability(String phone) {
@@ -506,16 +850,10 @@ public final class AppDatabase extends SQLiteOpenHelper {
                 "SELECT id,start_at,gross_cents FROM work_sessions WHERE end_at IS NULL ORDER BY id DESC LIMIT 1", null)) {
             if (cursor.moveToFirst()) { id = cursor.getLong(0); start = cursor.getLong(1); activeGross = cursor.getLong(2); }
         }
-        Calendar midnight = Calendar.getInstance();
-        midnight.set(Calendar.HOUR_OF_DAY, 0);
-        midnight.set(Calendar.MINUTE, 0);
-        midnight.set(Calendar.SECOND, 0);
-        midnight.set(Calendar.MILLISECOND, 0);
-        long today = midnight.getTimeInMillis();
-        long tomorrow = today + 24L * 3_600_000L;
-        long gross = ledger(dayKey(System.currentTimeMillis())).totalCents();
-        int priorMinutes = scalarInt("SELECT COALESCE(SUM((end_at-start_at)/60000),0) FROM work_sessions WHERE start_at>=? AND start_at<? AND end_at IS NOT NULL",
-                new String[]{Long.toString(today), Long.toString(tomorrow)});
+        int day = currentDayKey();
+        long gross = ledger(day).totalCents();
+        int priorMinutes = scalarInt("SELECT COALESCE(SUM((end_at-start_at)/60000),0) FROM work_sessions WHERE day_key=? AND end_at IS NOT NULL",
+                new String[]{Integer.toString(day)});
         long hourAgo = System.currentTimeMillis() - 3_600_000L;
         int offers = scalarInt("SELECT COUNT(*) FROM offers WHERE session_id=? AND captured_at>=?", new String[]{Long.toString(id), Long.toString(hourAgo)});
         int viable = scalarInt("SELECT COUNT(*) FROM offers WHERE session_id=? AND captured_at>=? AND decision='ACCEPTABLE'", new String[]{Long.toString(id), Long.toString(hourAgo)});
@@ -620,7 +958,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
 
     public JSONObject exportData() throws Exception {
         JSONObject root = new JSONObject();
-        root.put("format", "rota500-backup-v2");
+        root.put("format", BACKUP_FORMAT);
         root.put("exported_at", System.currentTimeMillis());
         for (String table : BACKUP_TABLES) {
             root.put(table, tableAsJson(table));
@@ -629,8 +967,11 @@ public final class AppDatabase extends SQLiteOpenHelper {
     }
 
     public synchronized void restoreData(JSONObject backup) throws Exception {
-        boolean oldFormat = "rota500-backup-v1".equals(backup.optString("format"));
-        if (!oldFormat && !"rota500-backup-v2".equals(backup.optString("format"))) {
+        String format = backup.optString("format");
+        boolean oldFormat = "rota500-backup-v1".equals(format);
+        // Q17: backups de antes da 0.9 (v1, v2) passam pelo reprocessamento dia = jornada.
+        boolean beforeJourneyDays = oldFormat || "rota500-backup-v2".equals(format);
+        if (!beforeJourneyDays && !BACKUP_FORMAT.equals(format)) {
             throw new IllegalArgumentException("Formato do backup desconhecido");
         }
         int required = oldFormat ? LEGACY_BACKUP_TABLES : BACKUP_TABLES.length;
@@ -660,6 +1001,7 @@ public final class AppDatabase extends SQLiteOpenHelper {
                 }
             }
             if (oldFormat) migrateOldGross(db);
+            if (beforeJourneyDays) reprocessJourneyDays(db);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();

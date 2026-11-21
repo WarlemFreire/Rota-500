@@ -21,7 +21,97 @@ public final class CoreSelfTest {
         throttlesOcrWithoutMissingNewOffer();
         keepsOneTruthForMoney();
         filtersOdometerAndPauses();
-        System.out.println("CoreSelfTest: 17 testes aprovados");
+        measuresFuelByFullTankCycles();
+        measuresGpsDistanceWithFilters();
+        watchesForgottenJourney();
+        keepsEarningsWhenPlatformResetsAtMidnight();
+        picksUpdateByBuildNumber();
+        System.out.println("CoreSelfTest: 22 testes aprovados");
+    }
+
+    private static void picksUpdateByBuildNumber() {
+        check(UpdatePicker.versionCodeFromAsset("rota500-0.9.0-teste.12-b12.apk") == 12, "número do build no nome");
+        check(UpdatePicker.versionCodeFromAsset("app-release.apk") == -1, "nome fora do padrão é ignorado");
+        List<UpdatePicker.Candidate> releases = List.of(
+                new UpdatePicker.Candidate("0.9.0", 15, false, "u15", "a", 1),
+                new UpdatePicker.Candidate("0.9.1-teste.18", 18, true, "u18", "b", 1),
+                new UpdatePicker.Candidate("0.8.0", 8, false, "u8", "c", 1));
+        check(UpdatePicker.best(releases, 12, false).versionCode() == 15, "canal estável ignora teste");
+        check(UpdatePicker.best(releases, 12, true).versionCode() == 18, "canal de teste pega o build mais novo");
+        check(UpdatePicker.best(releases, 18, true) == null, "nada mais novo que o instalado");
+    }
+
+    private static void measuresFuelByFullTankCycles() {
+        check(FuelMath.realCost(List.of(new FuelMath.Refuel(1, 25000, 40, 10000, true))) == null,
+                "um tanque cheio só não forma ciclo");
+        // Ciclo 1: cheio em 10.000 km; parcial R$ 100 (20 l); cheio R$ 150 (30 l) em 10.500 km.
+        List<FuelMath.Refuel> refuels = List.of(
+                new FuelMath.Refuel(1, 25000, 40, 10000, true),
+                new FuelMath.Refuel(2, 10000, 20, 10200, false),
+                new FuelMath.Refuel(3, 15000, 30, 10500, true));
+        FuelMath.Result one = FuelMath.realCost(refuels);
+        close(one.costPerKm(), 0.50, "R$ pago no ciclo / km do ciclo");
+        close(one.kmPerLiter(), 10.0, "km/l do ciclo");
+        check(one.cycles() == 1, "um ciclo completo");
+        List<FuelMath.Refuel> many = List.of(
+                new FuelMath.Refuel(1, 1, 1, 1000, true),
+                new FuelMath.Refuel(2, 99900, 1, 1100, true),   // ciclo antigo e caro, fica de fora
+                new FuelMath.Refuel(3, 6000, 10, 1200, true),
+                new FuelMath.Refuel(4, 6000, 10, 1300, true),
+                new FuelMath.Refuel(5, 6000, 10, 1400, true));
+        FuelMath.Result recent = FuelMath.realCost(many);
+        check(recent.cycles() == 3, "no máximo três ciclos");
+        close(recent.costPerKm(), 0.60, "média só dos três ciclos mais recentes");
+        check(FuelMath.divergent(0.70, 0.50) && !FuelMath.divergent(0.55, 0.50), "alerta de divergência acima de 30%");
+    }
+
+    private static void measuresGpsDistanceWithFilters() {
+        // ~1,11 km por 0,01 grau de latitude.
+        List<GpsDistance.Point> points = List.of(
+                new GpsDistance.Point(0, -22.70, -43.40, 10),
+                new GpsDistance.Point(120_000, -22.69, -43.40, 10),
+                new GpsDistance.Point(150_000, -22.50, -43.40, 10),   // salto de 21 km em 30 s
+                new GpsDistance.Point(180_000, -22.68, -43.40, 400),  // impreciso
+                new GpsDistance.Point(240_000, -22.68, -43.40, 10),
+                new GpsDistance.Point(4_000_000, -22.60, -43.40, 10),  // dentro da pausa
+                new GpsDistance.Point(7_300_000, -22.67, -43.40, 10)); // depois da pausa
+        List<WorkMath.Span> pauses = List.of(new WorkMath.Span(3_600_000, 7_200_000));
+        double km = GpsDistance.km(points, pauses);
+        check(km > 2.1 && km < 2.35, "dois trechos válidos de ~1,11 km, recebido " + km);
+        check(GpsDistance.lastMovementAt(points) == 7_300_000, "último movimento real");
+    }
+
+    private static void watchesForgottenJourney() {
+        long hour = 3_600_000L;
+        check(JourneyWatch.evaluate(false, 59 * 60_000L, 0).action() == JourneyWatch.Action.NONE, "antes de 1 h não pergunta");
+        JourneyWatch.Decision first = JourneyWatch.evaluate(false, hour, 0);
+        check(first.action() == JourneyWatch.Action.ASK_ACTIVE && first.promptNumber() == 1, "1 h sem ganho pergunta");
+        check(JourneyWatch.evaluate(false, hour + 1, 1).action() == JourneyWatch.Action.NONE, "não repete a mesma pergunta");
+        check(JourneyWatch.evaluate(false, 3 * hour, 2).promptNumber() == 3, "terceira pergunta às 3 h");
+        check(JourneyWatch.evaluate(false, 4 * hour, 3).action() == JourneyWatch.Action.AUTO_END, "três sem resposta encerram");
+        check(JourneyWatch.evaluate(true, hour, 0).action() == JourneyWatch.Action.NONE, "pausa de 1 h não pergunta");
+        check(JourneyWatch.evaluate(true, 2 * hour, 0).action() == JourneyWatch.Action.ASK_PAUSE, "pausa de 2 h pergunta");
+        check(JourneyWatch.presumedEnd(1000, 5000, 9000, 20_000) == 5000, "fim no último ganho");
+        check(JourneyWatch.presumedEnd(1000, 0, 9000, 20_000) == 9000, "sem ganho, último movimento");
+        check(JourneyWatch.presumedEnd(1000, 0, 0, 20_000_000) == 1000 + hour, "sem dados, início + 1 h");
+        check(JourneyWatch.presumedEnd(1000, 0, 0, 5000) == 5000, "nunca depois de agora");
+    }
+
+    private static void keepsEarningsWhenPlatformResetsAtMidnight() {
+        long baseline = MoneyLedger.baselineAfterReset(0, 40000);
+        List<MoneyLedger.Entry> entries = List.of(
+                new MoneyLedger.Entry(1, 1, "PLATFORM", "UBER", 40000, 0, false),
+                new MoneyLedger.Entry(2, 2, "PLATFORM", "UBER", 3000, baseline, false),
+                new MoneyLedger.Entry(3, 3, "PLATFORM", "UBER", 8000, baseline, false));
+        check(MoneyLedger.at(entries, 2).totalCents() == 43000, "zerou: soma ao anterior");
+        check(MoneyLedger.at(entries, 3).totalCents() == 48000, "leituras seguintes continuam somando");
+        long[] rebased = MoneyLedger.rebasedBaselines(List.of(
+                new MoneyLedger.Reading(30000, false),
+                new MoneyLedger.Reading(40000, false),
+                new MoneyLedger.Reading(3000, true),
+                new MoneyLedger.Reading(2500, false)), 0);
+        check(rebased[0] == 0 && rebased[1] == 0, "antes da meia-noite mantém a base");
+        check(rebased[2] == -40000 && rebased[3] == -40000, "total menor após a virada vira zeramento");
     }
 
     private static void parsesOffer() {

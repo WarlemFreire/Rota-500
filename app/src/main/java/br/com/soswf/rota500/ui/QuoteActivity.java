@@ -18,6 +18,7 @@ import br.com.soswf.rota500.core.QuoteInput;
 import br.com.soswf.rota500.core.QuoteResult;
 import br.com.soswf.rota500.data.AppDatabase;
 import br.com.soswf.rota500.data.AppPreferences;
+import br.com.soswf.rota500.data.CarCosts;
 
 public final class QuoteActivity extends Activity {
     private EditText client, phone, scheduled, origin, destination, stops, passengers, luggage, tripType, payment, notes;
@@ -62,7 +63,8 @@ public final class QuoteActivity extends Activity {
         returnMin = Ui.field(this, tripFields, "Minutos de retorno", "0", true);
         waitingMin = Ui.field(this, tripFields, "Minutos de espera", "0", true);
         LinearLayout costFields = Ui.disclosure(this, root, "Custos e margem", "wallet", false);
-        costKm = Ui.field(this, costFields, "Custo operacional R$/km", money(preferences.operatingCostPerKm()), true);
+        costKm = Ui.field(this, costFields, "Custo operacional R$/km (combustível + desgaste)",
+                money(CarCosts.load(AppDatabase.get(this), preferences).totalPerKm()), true);
         desiredNet = Ui.field(this, costFields, "Líquido desejado R$/h", money(preferences.desiredNetPerHour()), true);
         appNet = Ui.field(this, costFields, "Alternativa líquida estimada nos apps R$/h (ajuste manualmente)",
                 money(preferences.desiredNetPerHour()), true);

@@ -30,7 +30,7 @@ public final class StrategyCoordinator {
 
     public StrategySnapshot snapshot() {
         DashboardStats stats = database.dashboardStats();
-        FinancialToday day = database.financialToday(preferences.fuelCostPerKm(), preferences.wearCostPerKm());
+        FinancialToday day = database.financialToday(preferences);
         Long measuredRate = day.blockGrossPerHourCents() != null
                 ? day.blockGrossPerHourCents() : day.dayGrossPerHourCents();
         return new StrategySnapshot(

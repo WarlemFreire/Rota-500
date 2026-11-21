@@ -1,21 +1,19 @@
-# Relatório de validação da versão 0.2, 25/09/2026
+# Relatório de validação da versão 0.9, 21/11/2026
 
 | Verificação | Resultado |
 | --- | --- |
-| Testes Java do núcleo (`./run-core-tests.sh`) | 11 aprovados |
-| Parser de tela com preço ambíguo e embarque ausente | Faz revisão manual |
-| Régua econômica e piso de custo | Aplicados |
-| Segurança, meta e guarda da estratégia externa | Cobertos por testes do núcleo |
-| Sintaxe Java (`./run-static-checks.sh`) | 32 arquivos válidos |
-| XML do projeto | 5 arquivos válidos |
-| Modelo proibido no código do aplicativo | Nenhuma ocorrência |
-| Serviço ou permissão de Acessibilidade | Ausente |
-| Captura de tela | Serviço `mediaProjection` declarado |
-| Compilação Android (`:app:assembleDebug`) | Aprovada na execução 36132649861 |
-| Integridade do APK | Arquivo ZIP interno válido e APK com bloco de assinatura |
-| Arquitetura nativa | ARM 64 bits, compatível com o Moto G56 5G |
-| Tamanho do APK | 22.334.169 bytes |
-| SHA-256 | `0e5db8f19c44eec8e77013300a32060c1f645e732a54ad1442fc509851cf61b4` |
-| Teste no telefone com Uber e 99 | Pendente |
+| Testes Java do núcleo (`./run-core-tests.sh`) | 22 aprovados |
+| Custo de combustível por ciclos de tanque cheio | Coberto (ciclo único, 3 ciclos mais recentes, divergência de 30%) |
+| Distância por GPS (precisão, saltos, pausas) | Coberto |
+| Jornada esquecida (1 h, 2 h em pausa, 3 sem resposta, horário presumido) | Coberto |
+| Total da plataforma que zera à meia-noite | Coberto (confirmação e reprocessamento do histórico) |
+| Escolha da atualização por número do build e canal | Coberto |
+| Sintaxe Java e XML (`sh run-static-checks.sh`) | 46 Java e 26 XML válidos |
+| Compilação do app contra Android 16 (API 36) | Aprovada, com stubs do ML Kit (verificação local, sem gerar APK) |
+| Chamadas acima do Android 11 (API 30) | Todas protegidas por checagem de versão |
+| Compilação Android completa (`gradle :app:assemble*`) | Pendente: roda no GitHub Actions |
+| Migração do banco 4 → 5 em aparelho com dados reais | Pendente: teste físico |
+| Notificações, reinício do celular e instalador do Android | Pendente: teste físico |
+| Leitura de ofertas da Uber e da 99 | Não funciona no aparelho (fica para a 0.10) |
 
-O fluxo de compilação confirmou Java 17, Gradle 9.5, Android SDK 36 e Build Tools 36.0.0. Os 11 testes do núcleo passaram novamente antes da montagem do APK. O OCR latino está incluído no pacote e analisa o quadro mais recente a cada 350 ms, sem salvar a imagem. A próxima etapa depende de teste físico para conferir permissões, interface, coleta de localização, leitura das telas instaladas da Uber e da 99 e tempo total até a recomendação.
+Este ambiente não tem o Android SDK. A compilação local usa o `android-all` do Robolectric (Android 16) como biblioteca do framework e classes vazias no lugar do ML Kit, o que confirma tipos e assinaturas, mas não substitui o build do Gradle nem o teste no telefone.

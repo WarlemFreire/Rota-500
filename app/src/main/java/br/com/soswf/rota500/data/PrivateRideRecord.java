@@ -9,9 +9,11 @@ public final class PrivateRideRecord {
     public final String destination;
     public final double price;
     public final String status;
+    /** Valor efetivamente lançado como ganho quando CONCLUÍDA (0 se não lançado). */
+    public final long receivedCents;
 
     public PrivateRideRecord(long id, String client, String phone, String scheduledAt,
-            String origin, String destination, double price, String status) {
+            String origin, String destination, double price, String status, long receivedCents) {
         this.id = id;
         this.client = client;
         this.phone = phone;
@@ -20,5 +22,6 @@ public final class PrivateRideRecord {
         this.destination = destination;
         this.price = price;
         this.status = status;
+        this.receivedCents = receivedCents;
     }
 }
